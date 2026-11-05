@@ -32,7 +32,6 @@ uv run nuitka \
   --include-package=dbus_next \
   --include-package=proxy_tools \
   --include-package=bottle \
-  --include-package=qtpy \
   --include-module=webview.platforms.cocoa \
   --include-package-data=webview \
   --include-data-dir=ui=ui \

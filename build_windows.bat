@@ -37,7 +37,6 @@ uv run nuitka ^
   --include-package=dbus_next ^
   --include-package=proxy_tools ^
   --include-package=bottle ^
-  --include-package=qtpy ^
   --include-package=pythonnet ^
   --include-package-data=pythonnet ^
   --include-package=clr_loader ^
