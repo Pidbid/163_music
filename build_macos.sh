@@ -18,6 +18,7 @@ cd "${ROOT}"
 
 APP_VERSION="$(uv run python -c 'from nm_shell.version import __version__; print(__version__)')"
 BUILD_DIR="dist/nuitka-macos"
+MAIN_BUNDLE="${BUILD_DIR}/main.app"
 APP_BUNDLE="${BUILD_DIR}/163-music.app"
 EXECUTABLE="${APP_BUNDLE}/Contents/MacOS/163-music"
 ZIP="dist/163-music-macos.zip"
@@ -47,6 +48,11 @@ uv run nuitka \
   --output-dir="${BUILD_DIR}" \
   --assume-yes-for-downloads \
   main.py
+
+if [[ -d "${MAIN_BUNDLE}" && ! -d "${APP_BUNDLE}" ]]; then
+  rm -rf "${APP_BUNDLE}"
+  mv "${MAIN_BUNDLE}" "${APP_BUNDLE}"
+fi
 
 if [[ ! -x "${EXECUTABLE}" ]]; then
   echo "Nuitka did not produce ${EXECUTABLE}" >&2
