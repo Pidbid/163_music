@@ -5,10 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 BINARY="dist/163-music"
-if [[ ! -x "${BINARY}" ]]; then
+if [[ ! -f "${BINARY}" ]]; then
   echo "build_appimage.sh requires dist/163-music (run ./build_linux.sh first)" >&2
   exit 1
 fi
+chmod +x "${BINARY}" 2>/dev/null || true
 
 APP_VERSION="$(python3 -c 'import re; from pathlib import Path; print(re.search(r"__version__ = \"([^\"]+)\"", Path("nm_shell/version.py").read_text()).group(1))')"
 APPIMAGETOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"

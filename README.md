@@ -137,7 +137,7 @@ build_windows.bat
 ```
 
 ```bash
-# macOS（Nuitka onefile）
+# macOS（Nuitka app bundle，生成 dist/163-music-macos.zip）
 ./build_macos.sh
 
 # AppImage（先执行 ./build_linux.sh 生成 dist/163-music）
@@ -149,7 +149,7 @@ APPIMAGETOOL=/path/to/appimagetool ./scripts/build_appimage.sh
 - `dist/163-music`
 - `dist/163-music_<version>_amd64.deb`
 - `dist/nuitka-windows/163-music.exe`（Windows）
-- `dist/nuitka-macos/163-music`（macOS）
+- `dist/163-music-macos.zip`（macOS .app）
 - `dist/163-music-<version>-x86_64.AppImage`（Linux）
 
 ## 🔄 持续集成
@@ -161,7 +161,7 @@ GitHub Actions 工作流位于 `.github/workflows/ci.yml`，覆盖四个目标�
 | `linux` | Ubuntu 22.04 amd64 | `163-music_<version>_amd64.deb` |
 | `appimage` | Ubuntu 22.04 x86_64 | `163-music-<version>-x86_64.AppImage` |
 | `windows` | windows-latest x64 | `163-music.exe`（Nuitka onefile） |
-| `macos` | macos-latest arm64 | `163-music`（Nuitka onefile） |
+| `macos` | macos-latest arm64 | `163-music-macos.zip`（Nuitka app bundle） |
 
 每次 push / PR 会先跑 `ruff` 和 `pytest`，然后构建对应平台产物。Windows/macOS 目前是 CI
 构建目标，主要交互仍以 Ubuntu 版本为准。

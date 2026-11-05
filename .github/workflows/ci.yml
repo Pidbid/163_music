@@ -81,7 +81,7 @@ jobs:
           chmod +x /tmp/appimagetool
       - name: Build AppImage
         run: |
-          chmod +x scripts/build_appimage.sh
+          chmod +x dist/163-music scripts/build_appimage.sh
           APPIMAGETOOL=/tmp/appimagetool ./scripts/build_appimage.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -120,12 +120,12 @@ jobs:
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run pytest
-      - name: Build onefile binary
+      - name: Build app bundle
         run: |
           chmod +x build_macos.sh
           ./build_macos.sh
       - uses: actions/upload-artifact@v4
         with:
           name: 163-music-macos
-          path: dist/nuitka-macos/163-music
+          path: dist/163-music-macos.zip
           if-no-files-found: error

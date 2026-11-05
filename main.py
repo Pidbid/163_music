@@ -138,7 +138,7 @@ def run_smoke(config: dict[str, Any]) -> int:
         "version": __version__,
         "checks": checks,
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    print(json.dumps(payload, ensure_ascii=True, indent=2))
     return 0 if payload["ok"] else 1
 
 
