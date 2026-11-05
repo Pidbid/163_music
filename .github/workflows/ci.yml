@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest
+
+  linux:
+    name: DEB (Ubuntu amd64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils patchelf ccache
+      - name: Build onefile and DEB
+        run: |
+          chmod +x build_linux.sh
+          ./build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 163-music-linux
+          path: |
+            dist/163-music
+            dist/163-music_*_amd64.deb
+          if-no-files-found: error
+
+  appimage:
+    name: AppImage (x86_64)
+    needs: linux
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install AppImage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils
+      - uses: actions/download-artifact@v4
+        with:
+          name: 163-music-linux
+          path: dist
+      - name: Get appimagetool
+        run: |
+          curl -L --fail -o /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+      - name: Build AppImage
+        run: |
+          chmod +x scripts/build_appimage.sh
+          APPIMAGETOOL=/tmp/appimagetool ./scripts/build_appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 163-music-appimage
+          path: dist/163-music-*-x86_64.AppImage
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - name: Build onefile EXE
+        run: .\build_windows.bat
+        shell: cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 163-music-windows
+          path: dist/nuitka-windows/163-music.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS (arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - name: Build onefile binary
+        run: |
+          chmod +x build_macos.sh
+          ./build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 163-music-macos
+          path: dist/nuitka-macos/163-music
+          if-no-files-found: error
