@@ -45,7 +45,7 @@ jobs:
             libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxcb-util1 \
             libx11-6 libx11-xcb1 libxcomposite1 libxdamage1 libxext6 \
             libxfixes3 libxrandr2 libxrender1 libxtst6 libxi6 libsm6 libice6 \
-            libnss3 libnspr4 libasound2 libpulse0 libdbus-1-3 libfontconfig1 \
+            libnss3 libnspr4 libminizip1 libasound2 libpulse0 libdbus-1-3 libfontconfig1 \
             libfreetype6 libpng16-16 libglib2.0-0 libgbm1 libdrm2 libexpat1 \
             libcups2 libxss1
       - name: Build onefile and DEB
@@ -80,7 +80,7 @@ jobs:
             libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxcb-util1 \
             libx11-6 libx11-xcb1 libxcomposite1 libxdamage1 libxext6 \
             libxfixes3 libxrandr2 libxrender1 libxtst6 libxi6 libsm6 libice6 \
-            libnss3 libnspr4 libasound2t64 libpulse0 libdbus-1-3 libfontconfig1 \
+            libnss3 libnspr4 libminizip1t64 libasound2t64 libpulse0 libdbus-1-3 libfontconfig1 \
             libfreetype6 libpng16-16t64 libglib2.0-0t64 libgbm1 libdrm2 libexpat1 \
             libcups2 libxss1
       - name: Build onefile and DEB
