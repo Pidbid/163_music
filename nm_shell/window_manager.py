@@ -28,6 +28,28 @@ def browser_view(window: Any) -> Any:
     return instances.get(getattr(window, "uid", None))
 
 
+def set_page_background(window: Any, color: str | None) -> bool:
+    """Set the WebEngine page background; ``None`` makes it transparent.
+
+    Must run on Qt's GUI thread. The page background is independent of the
+    window palette, so it is the only way to hide the viewport base colour
+    while the CSS clip path rounds the corners.
+    """
+    view = browser_view(window)
+    if view is None:
+        return False
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor
+
+        page = view.webview.page()
+        page.setBackgroundColor(Qt.GlobalColor.transparent if color is None else QColor(color))
+        return True
+    except Exception as error:  # noqa: BLE001 - Qt raises implementation-specific errors
+        logger.debug("Could not set the WebEngine page background: {}", error)
+        return False
+
+
 def window_handle(window: Any) -> Any:
     view = browser_view(window)
     if view is None:

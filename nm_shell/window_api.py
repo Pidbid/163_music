@@ -21,6 +21,7 @@ from .window_manager import (
     current_bounds,
     native_is_maximized,
     on_qt_gui_thread,
+    set_page_background,
     start_system_move,
     start_system_resize,
 )
@@ -52,6 +53,10 @@ def _make_qt_action_bridge(owner: ShellApi) -> Any:
         @Slot(result=bool)
         def force_show(self) -> bool:
             return self._api._qt_force_show()
+
+        @Slot(result=bool)
+        def page_transparent(self) -> bool:
+            return self._api._qt_page_transparent()
 
     return _QtWindowActionBridge(owner)
 
@@ -214,6 +219,10 @@ class ShellApi:
             self._set_maximized(False)
         return self._qt_action("move")
 
+    def page_transparent(self) -> bool:
+        """Let the desktop show through the rounded window corners."""
+        return self._qt_action("page_transparent")
+
     def _set_maximized(self, maximized: bool) -> None:
         window = self._main
         if window is None:
@@ -227,8 +236,10 @@ class ShellApi:
             if geometry is None:
                 logger.warning("No available screen geometry; leaving window size unchanged")
                 return
-            apply_bounds(window, geometry)
             self._main_maximized = True
+            self._notify_window_state()
+            self._refresh_js_state()
+            apply_bounds(window, geometry)
         else:
             try:
                 window.restore()
@@ -237,8 +248,8 @@ class ShellApi:
             if self._restore_bounds is not None:
                 apply_bounds(window, self._restore_bounds)
             self._main_maximized = False
-        self._notify_window_state()
-        self._refresh_js_state()
+            self._notify_window_state()
+            self._refresh_js_state()
 
     def _qt_window_handle(self) -> Any:
         from .window_manager import window_handle
@@ -278,6 +289,9 @@ class ShellApi:
             logger.debug("Could not force-show the native window: {}", error)
             return False
 
+    def _qt_page_transparent(self) -> bool:
+        return set_page_background(self._main, None)
+
     def _qt_action(self, name: str, *args: Any) -> bool:
         bridge = self._qt_actions
         if bridge is None:
@@ -286,6 +300,8 @@ class ShellApi:
                     return self._qt_start_system_resize(str(args[0]))
                 if name == "force_show":
                     return self._qt_force_show()
+                if name == "page_transparent":
+                    return self._qt_page_transparent()
                 return self._qt_start_system_move()
             logger.debug("Native window {} requested before Qt bridge was ready", name)
             return False
@@ -298,6 +314,8 @@ class ShellApi:
                     return self._qt_start_system_resize(str(args[0]))
                 if name == "force_show":
                     return self._qt_force_show()
+                if name == "page_transparent":
+                    return self._qt_page_transparent()
                 return self._qt_start_system_move()
             if name == "resize":
                 result = QMetaObject.invokeMethod(
@@ -311,6 +329,13 @@ class ShellApi:
                 result = QMetaObject.invokeMethod(
                     bridge,
                     "force_show",
+                    Qt.ConnectionType.BlockingQueuedConnection,
+                    Q_RETURN_ARG(bool),
+                )
+            elif name == "page_transparent":
+                result = QMetaObject.invokeMethod(
+                    bridge,
+                    "page_transparent",
                     Qt.ConnectionType.BlockingQueuedConnection,
                     Q_RETURN_ARG(bool),
                 )

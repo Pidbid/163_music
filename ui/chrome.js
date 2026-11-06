@@ -5,6 +5,8 @@
   var STYLE_ID = "nm-shell-style";
   var BAR_ID = "nm-shell-bar";
   var BAR_HEIGHT = 38;
+  var WINDOW_RADIUS = 12;
+  var ROUNDED_WINDOW = "__NM_ROUNDED_WINDOW__" === "true";
   var MIN_WIDTH = 940;
   var MIN_HEIGHT = 620;
   var DRAG_THRESHOLD = 4;
@@ -193,37 +195,25 @@
     );
   }
 
-  function contrastAgainst(background, candidates) {
-    var best = candidates[0];
-    var bestScore = 0;
-    candidates.forEach(function (candidate) {
-      var score = contrastRatio(candidate, background);
-      if (score > bestScore) {
-        best = candidate;
-        bestScore = score;
-      }
-    });
-    return { color: best, score: bestScore };
-  }
-
-  function bestForeground(background) {
-    var standard = contrastAgainst(background, [DARK_FG, LIGHT_FG]);
-    if (standard.score >= 4.6) return standard.color;
-    return contrastAgainst(background, [BLACK_FG, WHITE_FG]).color;
-  }
-
   function bestForegroundFor(backgrounds) {
-    var standard = { color: DARK_FG, score: 0 };
-    var escalated = { color: BLACK_FG, score: 0 };
-    backgrounds.forEach(function (background) {
-      if (!background) return;
-      var normal = contrastAgainst(background, [DARK_FG, LIGHT_FG]);
-      var high = contrastAgainst(background, [BLACK_FG, WHITE_FG]);
-      if (!standard.score || normal.score < standard.score) standard = normal;
-      if (!escalated.score || high.score < escalated.score) escalated = high;
-    });
-    if (standard.score >= 4.6) return standard.color;
-    return escalated.color;
+    function pick(candidates) {
+      var best = candidates[0];
+      var bestScore = -1;
+      candidates.forEach(function (candidate) {
+        var score = Infinity;
+        backgrounds.forEach(function (background) {
+          if (background) score = Math.min(score, contrastRatio(candidate, background));
+        });
+        if (!isFinite(score)) score = 0;
+        if (score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      });
+      return { color: best, score: bestScore };
+    }
+    var standard = pick([DARK_FG, LIGHT_FG]);
+    return standard.score >= 4.6 ? standard.color : pick([BLACK_FG, WHITE_FG]).color;
   }
 
   function parseGradient(value) {
@@ -264,7 +254,8 @@
   }
 
   function colorAt(x, y) {
-    var bodyColor = parseColor(getComputedStyle(document.body).backgroundColor) ||
+    var bodyColor = pageBaseColor ||
+      parseColor(getComputedStyle(document.body).backgroundColor) ||
       { r: 247, g: 249, b: 252, a: 1 };
     var result = { r: bodyColor.r, g: bodyColor.g, b: bodyColor.b, a: 1 };
     var stack = document.elementsFromPoint(x, y);
@@ -284,13 +275,47 @@
     return result;
   }
 
-  function sampleTheme() {
-    var bar = document.getElementById(BAR_ID);
-    if (!bar) return;
+  var THEME_FRACTIONS = [0, 0.02, 0.05, 0.09, 0.13, 0.15, 0.18, 0.24, 0.32, 0.45, 0.6, 0.75, 0.9, 1];
+  var THEME_MIN_MS = 360;
+  var THEME_MAX_MS = 640;
+  var THEME_SKIP_DELTA_E = 1;
+  var THEME_SAMPLE_GAP_MS = 500;
+  var THEME_MAX_STOPS = 24;
+  var BOTTOM_CACHE_MS = 2000;
+  var themeState = { current: null, from: null, to: null, started: 0, duration: 0, frame: 0 };
+  var bottomThemeCache = { time: 0, color: null };
+  var themeSampleTimer = 0;
+  var lastThemeSampleAt = 0;
+  var shellFrame = null;
+  var pageBaseColor = null;
+
+  function prefersReducedMotion() {
+    try {
+      return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function colorAtPercent(stops, percent) {
+    if (!stops || !stops.length) return { r: 247, g: 249, b: 252, a: 1 };
+    if (percent <= stops[0].percent) return stops[0].color;
+    for (var i = 1; i < stops.length; i += 1) {
+      var previous = stops[i - 1];
+      var next = stops[i];
+      if (percent <= next.percent) {
+        var span = next.percent - previous.percent;
+        var amount = span > 0 ? (percent - previous.percent) / span : 0;
+        return mixColor(previous.color, next.color, amount);
+      }
+    }
+    return stops[stops.length - 1].color;
+  }
+
+  function sampleTop() {
     var width = Math.max(1, window.innerWidth);
-    var y = Math.min(window.innerHeight - 1, BAR_HEIGHT + 2);
-    var fractions = [0, 0.02, 0.05, 0.09, 0.13, 0.15, 0.18, 0.24, 0.32, 0.45, 0.6, 0.75, 0.9, 1];
-    var samples = fractions.map(function (fraction) {
+    var y = Math.max(0, Math.min(window.innerHeight - 1, BAR_HEIGHT + 2));
+    var samples = THEME_FRACTIONS.map(function (fraction) {
       var x = Math.max(0, Math.min(width - 1, Math.round(fraction * (width - 1))));
       return { percent: fraction * 100, color: colorAt(x, y) };
     });
@@ -310,26 +335,240 @@
       samples.push({ percent: boundary + 0.05, color: colorAt(rightX, y) });
       samples.sort(function (a, b) { return a.percent - b.percent; });
     }
-    var first = samples[0].color;
-    var solid = samples.every(function (sample) {
-      return Math.abs(sample.color.r - first.r) +
-        Math.abs(sample.color.g - first.g) +
-        Math.abs(sample.color.b - first.b) < 12;
-    });
-    var background = solid ? rgb(first) : "linear-gradient(90deg, " + samples.map(function (sample) {
-      return rgb(sample.color) + " " + sample.percent.toFixed(1) + "%";
-    }).join(", ") + ")";
-    var titleColor = colorAt(Math.min(width - 1, 80), y);
-    var controlColor = colorAt(Math.max(0, width - 66), y);
-    var titleForeground = bestForeground(titleColor);
-    var controlForeground = bestForeground(controlColor);
+    return samples;
+  }
+
+  function sampleBottom() {
+    var now = Date.now();
+    if (now - bottomThemeCache.time < BOTTOM_CACHE_MS) return bottomThemeCache.color;
+    var color = null;
+    var bar = footer();
+    if (bar) {
+      var rect = bar.getBoundingClientRect();
+      if (rect.width > 8 && rect.height > 8 && rect.height < window.innerHeight * 0.6 &&
+          rect.bottom > BAR_HEIGHT + 4 && rect.top < window.innerHeight - 4) {
+        var y = Math.max(
+          BAR_HEIGHT + 4,
+          Math.min(window.innerHeight - 5, rect.top + rect.height * 0.5)
+        );
+        var width = Math.max(1, window.innerWidth);
+        var fractions = [0.03, 0.2, 0.5, 0.8, 0.97];
+        color = averageColor(fractions.map(function (fraction) {
+          var x = Math.max(0, Math.min(width - 1, Math.round(fraction * (width - 1))));
+          return colorAt(x, y);
+        }));
+      }
+    }
+    bottomThemeCache = { time: now, color: color };
+    return color;
+  }
+
+  function tintAlpha(top, bottom) {
+    if (!top || !bottom) return 0;
+    if (deltaE(top, bottom) <= 5) return 0.7;
+    var low = 0;
+    var high = 0.7;
+    for (var i = 0; i < 28; i += 1) {
+      var middle = (low + high) / 2;
+      if (deltaE(mixColor(top, bottom, middle), top) <= 5) low = middle;
+      else high = middle;
+    }
+    return low;
+  }
+
+  function themeModel() {
+    var top = sampleTop();
+    var mean = averageColor(top.map(function (sample) { return sample.color; })) ||
+      { r: 247, g: 249, b: 252, a: 1 };
+    var bottom = sampleBottom();
+    var alpha = tintAlpha(mean, bottom);
+    return {
+      top: top,
+      mean: mean,
+      tint: alpha > 0.001 ? { color: bottom, alpha: alpha } : null
+    };
+  }
+
+  function backgroundFor(model) {
+    var stops = model.top.map(function (sample) {
+      return rgb(sample.color) + " " + sample.percent.toFixed(2) + "%";
+    }).join(", ");
+    var base = "linear-gradient(90deg, " + stops + ")";
+    if (!model.tint) return base;
+    var color = model.tint.color;
+    var alpha = model.tint.alpha;
+    return "linear-gradient(180deg, " + rgba(color, alpha) + " 0%, " +
+      rgba(color, alpha * 0.82) + " 52%, " + rgba(color, 0) + " 100%), " + base;
+  }
+
+  function tintAt(model, fraction) {
+    if (!model.tint) return null;
+    var amount = Math.max(0, Math.min(1, fraction));
+    var alpha = amount <= 0.52
+      ? model.tint.alpha * (1 - 0.18 * (amount / 0.52))
+      : model.tint.alpha * 0.82 * (1 - (amount - 0.52) / 0.48);
+    return alpha > 0.001 ? { color: model.tint.color, alpha: alpha } : null;
+  }
+
+  function modelColorAt(model, percent, verticalFraction) {
+    var base = colorAtPercent(model.top, percent);
+    var tint = tintAt(model, verticalFraction);
+    return tint ? mixColor(base, tint.color, tint.alpha) : base;
+  }
+
+  function setStyleIfChanged(bar, name, value) {
+    if (bar.style.getPropertyValue(name) !== value) bar.style.setProperty(name, value);
+  }
+
+  function applyForeground(model, bar) {
+    var width = Math.max(1, window.innerWidth);
+    var titlePercent = width > 1 ? (Math.min(width - 1, 80) / (width - 1)) * 100 : 0;
+    var controlPercent = width > 1 ? (Math.max(0, width - 66) / (width - 1)) * 100 : 100;
+    var titleBackgrounds = [
+      modelColorAt(model, titlePercent, 0),
+      modelColorAt(model, titlePercent, 0.5)
+    ];
+    var controlBackgrounds = [
+      modelColorAt(model, controlPercent, 0),
+      modelColorAt(model, controlPercent, 0.5)
+    ];
+    var titleForeground = bestForegroundFor(titleBackgrounds);
+    var controlForeground = bestForegroundFor(controlBackgrounds);
+    var controlColor = modelColorAt(model, controlPercent, 0.5);
     var controlLum = luminance(controlColor);
-    bar.style.setProperty("--nm-bar-bg", background);
-    bar.style.setProperty("--nm-bar-fg", rgb(titleForeground));
-    bar.style.setProperty("--nm-title-fg", rgb(titleForeground));
-    bar.style.setProperty("--nm-control-fg", rgb(controlForeground));
-    bar.style.setProperty("--nm-accent", controlLum > 0.52 ? "#ec4141" : "#ff6b6b");
-    bar.style.setProperty("--nm-accent-fg", controlLum > 0.52 ? "#ffffff" : "#1a1011");
+    setStyleIfChanged(bar, "--nm-bar-fg", rgb(titleForeground));
+    setStyleIfChanged(bar, "--nm-title-fg", rgb(titleForeground));
+    setStyleIfChanged(bar, "--nm-control-fg", rgb(controlForeground));
+    setStyleIfChanged(bar, "--nm-accent", controlLum > 0.52 ? "#ec4141" : "#ff6b6b");
+    setStyleIfChanged(bar, "--nm-accent-fg", controlLum > 0.52 ? "#ffffff" : "#1a1011");
+    if (shellFrame) {
+      shellFrame.style.boxShadow = titleForeground === LIGHT_FG || titleForeground === WHITE_FG
+        ? "inset 0 0 0 1px rgba(255, 255, 255, .12)"
+        : "inset 0 0 0 1px rgba(0, 0, 0, .08)";
+    }
+  }
+
+  function applyTheme(model) {
+    var bar = document.getElementById(BAR_ID);
+    if (!bar || !model) return;
+    bar.style.setProperty("--nm-bar-bg", backgroundFor(model));
+    applyForeground(model, bar);
+  }
+
+  function interpolateStops(first, second, amount) {
+    if (!first || !second) return first || second || [];
+    var seen = {};
+    var percents = [];
+    first.concat(second).forEach(function (stop) {
+      var key = stop.percent.toFixed(2);
+      if (seen[key]) return;
+      seen[key] = true;
+      percents.push(Number(key));
+    });
+    percents.sort(function (a, b) { return a - b; });
+    if (percents.length > THEME_MAX_STOPS) {
+      percents = [];
+      for (var i = 0; i < THEME_MAX_STOPS; i += 1) {
+        percents.push((i / (THEME_MAX_STOPS - 1)) * 100);
+      }
+    }
+    return percents.map(function (percent) {
+      return {
+        percent: percent,
+        color: mixColor(colorAtPercent(first, percent), colorAtPercent(second, percent), amount)
+      };
+    });
+  }
+
+  function interpolateTint(first, second, amount) {
+    var from = first || { color: second ? second.color : { r: 0, g: 0, b: 0, a: 1 }, alpha: 0 };
+    var to = second || { color: from.color, alpha: 0 };
+    var alpha = from.alpha + (to.alpha - from.alpha) * amount;
+    if (alpha <= 0.001) return null;
+    return { color: mixColor(from.color, to.color, amount), alpha: alpha };
+  }
+
+  function interpolateModel(first, second, amount) {
+    return {
+      top: interpolateStops(first.top, second.top, amount),
+      mean: mixColor(first.mean, second.mean, amount),
+      tint: interpolateTint(first.tint, second.tint, amount)
+    };
+  }
+
+  function themeDistance(first, second) {
+    var distance = deltaE(first.mean, second.mean);
+    var firstTint = first.tint || { color: first.mean, alpha: 0 };
+    var secondTint = second.tint || { color: second.mean, alpha: 0 };
+    var tintDistance = deltaE(firstTint.color, secondTint.color) *
+      Math.max(firstTint.alpha, secondTint.alpha);
+    return Math.max(distance, tintDistance);
+  }
+
+  function stepTheme(now) {
+    var elapsed = themeState.duration > 1
+      ? (now - themeState.started) / themeState.duration
+      : 1;
+    var amount = Math.max(0, Math.min(1, elapsed));
+    var eased = amount * amount * (3 - 2 * amount);
+    var model = interpolateModel(themeState.from, themeState.to, eased);
+    themeState.current = model;
+    applyTheme(model);
+    if (amount < 1) {
+      themeState.frame = requestAnimationFrame(stepTheme);
+      return;
+    }
+    themeState.frame = 0;
+    themeState.current = themeState.to;
+    applyTheme(themeState.to);
+  }
+
+  function startTheme(next, immediate) {
+    if (!themeState.current) {
+      themeState.current = next;
+      applyTheme(next);
+      return;
+    }
+    var distance = themeDistance(themeState.current, next);
+    if (distance < THEME_SKIP_DELTA_E && !immediate) return;
+    if (immediate || document.hidden || prefersReducedMotion()) {
+      if (themeState.frame) cancelAnimationFrame(themeState.frame);
+      themeState.frame = 0;
+      themeState.current = next;
+      applyTheme(next);
+      return;
+    }
+    var duration = Math.max(THEME_MIN_MS, Math.min(THEME_MAX_MS, THEME_MIN_MS + 8 * distance));
+    themeState.from = themeState.current;
+    themeState.to = next;
+    themeState.started = performance.now();
+    themeState.duration = duration;
+    if (!themeState.frame) themeState.frame = requestAnimationFrame(stepTheme);
+  }
+
+  function sampleTheme(immediate) {
+    var bar = document.getElementById(BAR_ID);
+    if (!bar) return;
+    lastThemeSampleAt = Date.now();
+    if (document.hidden && !immediate) return;
+    try {
+      startTheme(themeModel(), !!immediate);
+    } catch (error) {
+      logError("主题采样失败：" + (error && error.message ? error.message : error));
+    } finally {
+      if (bar.getAttribute("data-nm-theme-ready") !== "1") {
+        bar.setAttribute("data-nm-theme-ready", "1");
+      }
+    }
+  }
+
+  function scheduleThemeSample() {
+    if (themeSampleTimer) return;
+    var wait = Math.max(0, THEME_SAMPLE_GAP_MS - (Date.now() - lastThemeSampleAt));
+    themeSampleTimer = setTimeout(function () {
+      themeSampleTimer = 0;
+      sampleTheme();
+    }, wait);
   }
 
   function installStyle() {
@@ -352,8 +591,24 @@
       "  font: 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',",
       "    'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;",
       "  user-select: none; -webkit-user-select: none;",
-      "  transition: background .22s ease, color .22s ease;",
+      "  visibility: hidden;",
       "}",
+      "#nm-shell-bar[data-nm-theme-ready='1'] { visibility: visible; }",
+      "html.nm-window-rounded { clip-path: inset(0 round " + WINDOW_RADIUS + "px); }",
+      "html.nm-window-maximized { clip-path: none; }",
+      "html.nm-window-rounded, html.nm-window-rounded body {",
+      "  background-color: transparent !important;",
+      "  background-image: none !important;",
+      "}",
+      "#nm-shell-backdrop {",
+      "  position: fixed; inset: 0; z-index: -2147483648; pointer-events: none;",
+      "}",
+      "#nm-shell-frame {",
+      "  position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;",
+      "  border-radius: " + WINDOW_RADIUS + "px;",
+      "  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);",
+      "}",
+      "html.nm-window-maximized #nm-shell-frame { display: none; }",
       "#nm-shell-bar .nm-drag {",
       "  flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 8px;",
       "  padding: 0 13px; cursor: default;",
@@ -426,8 +681,21 @@
   var maximizedState = false;
   var windowActionBusy = false;
 
+  function applyWindowShape(maximized) {
+    var root = document.documentElement;
+    if (!root) return;
+    if (!ROUNDED_WINDOW) {
+      root.classList.remove("nm-window-rounded", "nm-window-maximized");
+      return;
+    }
+    root.classList.toggle("nm-window-maximized", !!maximized);
+    root.classList.toggle("nm-window-rounded", !maximized);
+    if (shellFrame) shellFrame.style.display = maximized ? "none" : "block";
+  }
+
   function updateMaximizeIcon(maximized) {
     maximizedState = !!maximized;
+    applyWindowShape(maximizedState);
     var button = document.querySelector('#nm-shell-bar [data-action="toggle_maximize"]');
     if (!button) return;
     button.replaceChildren(icon(maximized ? RESTORE_PATH : MAXIMIZE_PATH));
@@ -761,10 +1029,51 @@
     });
   }
 
+  function capturePageBase() {
+    var backdrop = document.getElementById("nm-shell-backdrop");
+    if (!document.body) return;
+    var bodyStyle = getComputedStyle(document.body);
+    var htmlStyle = getComputedStyle(document.documentElement);
+    var base = layerColor(document.body) || layerColor(document.documentElement) ||
+      { r: 247, g: 249, b: 252, a: 1 };
+    pageBaseColor = { r: base.r, g: base.g, b: base.b, a: 1 };
+    if (!backdrop) return;
+    var image = bodyStyle.backgroundImage;
+    if (!image || image === "none") image = htmlStyle.backgroundImage;
+    var color = bodyStyle.backgroundColor;
+    if (!color || color === "rgba(0, 0, 0, 0)") color = htmlStyle.backgroundColor;
+    backdrop.style.backgroundImage = image && image !== "none" ? image : "none";
+    backdrop.style.backgroundColor = color && color !== "rgba(0, 0, 0, 0)"
+      ? color
+      : rgb(pageBaseColor);
+    backdrop.style.backgroundSize = bodyStyle.backgroundSize;
+    backdrop.style.backgroundPosition = bodyStyle.backgroundPosition;
+    backdrop.style.backgroundRepeat = bodyStyle.backgroundRepeat;
+  }
+
+  function installShellFrame() {
+    if (!document.body || !ROUNDED_WINDOW) return;
+    var backdrop = document.getElementById("nm-shell-backdrop");
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.id = "nm-shell-backdrop";
+      backdrop.setAttribute("aria-hidden", "true");
+      document.body.appendChild(backdrop);
+    }
+    capturePageBase();
+    if (shellFrame) return;
+    shellFrame = document.createElement("div");
+    shellFrame.id = "nm-shell-frame";
+    shellFrame.setAttribute("aria-hidden", "true");
+    document.body.appendChild(shellFrame);
+  }
+
   function installBar() {
     if (!document.body) return;
     installStyle();
     installResizeZones();
+    installShellFrame();
+    applyWindowShape(maximizedState);
     if (document.getElementById(BAR_ID)) {
       sampleTheme();
       return;
@@ -813,16 +1122,19 @@
     bar.appendChild(actions);
     document.body.appendChild(bar);
 
-    sampleTheme();
+    sampleTheme(true);
     refreshWindowState();
-    setInterval(sampleTheme, 1000);
+    if (ROUNDED_WINDOW) {
+      safeCall("page_transparent").catch(function () {});
+    }
+    setInterval(scheduleThemeSample, 1000);
     setInterval(refreshWindowState, 15000);
     watchThemeChanges();
   }
 
   function watchThemeChanges() {
     if (typeof MutationObserver !== "function") return;
-    var observer = new MutationObserver(function () { sampleTheme(); });
+    var observer = new MutationObserver(scheduleThemeSample);
     if (document.body) {
       observer.observe(document.body, { attributes: true, attributeFilter: ["class", "style"] });
     }
@@ -834,8 +1146,11 @@
       observer.observe(app, { attributes: true, attributeFilter: ["class", "style"] });
     }
     window.__nmShellThemeObserver = observer;
-    window.addEventListener("popstate", sampleTheme);
-    window.addEventListener("hashchange", sampleTheme);
+    window.addEventListener("popstate", scheduleThemeSample);
+    window.addEventListener("hashchange", scheduleThemeSample);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) sampleTheme(true);
+    });
   }
 
   function isRendered(element) {

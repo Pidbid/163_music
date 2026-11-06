@@ -105,7 +105,11 @@ def run_smoke(config: dict[str, Any]) -> int:
         from nm_shell.webview_app import build_chrome_script
 
         script = build_chrome_script()
-        checks["chrome"] = {"ok": "__NM_ICON_DATA_URI__" not in script and "nm-shell-bar" in script}
+        checks["chrome"] = {
+            "ok": "__NM_ICON_DATA_URI__" not in script
+            and "__NM_ROUNDED_WINDOW__" not in script
+            and "nm-shell-bar" in script
+        }
     except Exception as error:  # noqa: BLE001
         checks["chrome"] = {"ok": False, "error": str(error)}
 

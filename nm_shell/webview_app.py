@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import queue
+import sys
 import threading
 from typing import Any
 
@@ -20,6 +21,7 @@ from .lyrics import LyricsCache
 from .paths import APP_DISPLAY_NAME, APP_URL, ensure_data_dirs, icon_path, resource_path, webengine_dir
 from .player import PlayerState
 from .window_api import MIN_HEIGHT, MIN_WIDTH, ShellApi
+from .window_manager import set_page_background
 
 CHROME_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -30,6 +32,8 @@ CHROMIUM_FLAGS = (
     "--disable-renderer-backgrounding "
     "--disable-backgrounding-occluded-windows"
 )
+WINDOW_BASE_COLOR = "#f7f9fc"
+TRANSPARENT_WINDOW = sys.platform.startswith("linux")
 
 
 def _set_chromium_flags() -> None:
@@ -50,7 +54,10 @@ def build_chrome_script() -> str:
     if icon_file is not None:
         encoded = base64.b64encode(icon_file.read_bytes()).decode("ascii")
         data_uri = f"data:image/png;base64,{encoded}"
-    return script.replace("__NM_ICON_DATA_URI__", data_uri)
+    rounded = "true" if TRANSPARENT_WINDOW else "false"
+    return script.replace("__NM_ICON_DATA_URI__", data_uri).replace(
+        "__NM_ROUNDED_WINDOW__", rounded
+    )
 
 
 def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any = None) -> int:
@@ -136,12 +143,18 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         resizable=True,
         text_select=True,
         zoomable=False,
-        transparent=False,
+        transparent=TRANSPARENT_WINDOW,
         shadow=True,
-        background_color="#f7f9fc",
+        background_color=WINDOW_BASE_COLOR,
         confirm_close=False,
     )
     api.bind(main)
+
+    if TRANSPARENT_WINDOW:
+        def prepare_transparent_window() -> None:
+            set_page_background(main, WINDOW_BASE_COLOR)
+
+        main.events.before_show += prepare_transparent_window
 
     def inject_chrome() -> None:
         nonlocal chrome_script
@@ -149,6 +162,8 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
             if chrome_script is None:
                 chrome_script = build_chrome_script()
             main.run_js(chrome_script)
+            if TRANSPARENT_WINDOW:
+                threading.Timer(0.15, api.page_transparent).start()
         except Exception as error:  # noqa: BLE001
             logger.warning("Could not inject shell chrome: {}", error)
 
