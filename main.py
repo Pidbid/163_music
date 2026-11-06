@@ -72,6 +72,7 @@ def run_smoke(config: dict[str, Any]) -> int:
     setup_logging(bool(config.get("debug", False)), console=True)
     checks: dict[str, Any] = {}
     try:
+        os.environ["QT_API"] = "pyside6"
         import dbus_next  # noqa: F401
         import PySide6
         import webview  # noqa: F401

@@ -127,10 +127,103 @@
     return (lighter + 0.05) / (darker + 0.05);
   }
 
+  var DARK_FG = { r: 24, g: 32, b: 49, a: 1 };
+  var LIGHT_FG = { r: 245, g: 247, b: 250, a: 1 };
+  var BLACK_FG = { r: 0, g: 0, b: 0, a: 1 };
+  var WHITE_FG = { r: 255, g: 255, b: 255, a: 1 };
+
+  function rgba(color, alpha) {
+    return "rgba(" + Math.round(color.r) + ", " + Math.round(color.g) + ", " +
+      Math.round(color.b) + ", " + Math.max(0, Math.min(1, alpha)).toFixed(4) + ")";
+  }
+
+  function mixColor(first, second, amount) {
+    var t = Math.max(0, Math.min(1, amount));
+    return {
+      r: first.r + (second.r - first.r) * t,
+      g: first.g + (second.g - first.g) * t,
+      b: first.b + (second.b - first.b) * t,
+      a: 1
+    };
+  }
+
+  function averageColor(colors) {
+    var total = 0;
+    var r = 0;
+    var g = 0;
+    var b = 0;
+    colors.forEach(function (color) {
+      if (!color) return;
+      total += 1;
+      r += color.r;
+      g += color.g;
+      b += color.b;
+    });
+    if (!total) return null;
+    return { r: r / total, g: g / total, b: b / total, a: 1 };
+  }
+
+  function toLinear(value) {
+    var scaled = value / 255;
+    return scaled <= 0.04045 ? scaled / 12.92 : Math.pow((scaled + 0.055) / 1.055, 2.4);
+  }
+
+  function lab(color) {
+    var r = toLinear(color.r);
+    var g = toLinear(color.g);
+    var b = toLinear(color.b);
+    var x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+    var y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+    var z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
+    function pivot(value) {
+      return value > 0.008856 ? Math.cbrt(value) : 7.787 * value + 16 / 116;
+    }
+    var fx = pivot(x);
+    var fy = pivot(y);
+    var fz = pivot(z);
+    return { L: 116 * fy - 16, a: 500 * (fx - fy), b: 200 * (fy - fz) };
+  }
+
+  function deltaE(first, second) {
+    if (!first || !second) return 60;
+    var a = lab(first);
+    var b = lab(second);
+    return Math.sqrt(
+      Math.pow(a.L - b.L, 2) + Math.pow(a.a - b.a, 2) + Math.pow(a.b - b.b, 2)
+    );
+  }
+
+  function contrastAgainst(background, candidates) {
+    var best = candidates[0];
+    var bestScore = 0;
+    candidates.forEach(function (candidate) {
+      var score = contrastRatio(candidate, background);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    });
+    return { color: best, score: bestScore };
+  }
+
   function bestForeground(background) {
-    var dark = { r: 24, g: 32, b: 49, a: 1 };
-    var light = { r: 245, g: 247, b: 250, a: 1 };
-    return contrastRatio(dark, background) >= contrastRatio(light, background) ? dark : light;
+    var standard = contrastAgainst(background, [DARK_FG, LIGHT_FG]);
+    if (standard.score >= 4.6) return standard.color;
+    return contrastAgainst(background, [BLACK_FG, WHITE_FG]).color;
+  }
+
+  function bestForegroundFor(backgrounds) {
+    var standard = { color: DARK_FG, score: 0 };
+    var escalated = { color: BLACK_FG, score: 0 };
+    backgrounds.forEach(function (background) {
+      if (!background) return;
+      var normal = contrastAgainst(background, [DARK_FG, LIGHT_FG]);
+      var high = contrastAgainst(background, [BLACK_FG, WHITE_FG]);
+      if (!standard.score || normal.score < standard.score) standard = normal;
+      if (!escalated.score || high.score < escalated.score) escalated = high;
+    });
+    if (standard.score >= 4.6) return standard.color;
+    return escalated.color;
   }
 
   function parseGradient(value) {

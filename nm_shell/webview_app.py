@@ -8,7 +8,11 @@ import queue
 import threading
 from typing import Any
 
-import webview
+# pywebview's Qt backend imports qtpy before the binding is selected. Force
+# PySide6 so a missing PyQt5 package cannot be reported instead.
+os.environ["QT_API"] = "pyside6"
+
+import webview  # noqa: E402
 from loguru import logger
 
 from . import ipc
