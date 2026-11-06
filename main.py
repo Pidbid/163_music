@@ -80,6 +80,16 @@ def run_smoke(config: dict[str, Any]) -> int:
         backend = "unknown"
         if sys.platform.startswith("linux"):
             from qtpy import QtCore, QtGui, QtNetwork, QtWidgets  # noqa: F401, I001
+            from qtpy.QtNetwork import QSslCertificate, QSslConfiguration  # noqa: F401
+            from qtpy.QtWebChannel import QWebChannel  # noqa: F401
+            from qtpy.QtWebEngineCore import QWebEngineUrlRequestInterceptor  # noqa: F401
+            from qtpy.QtWebEngineWidgets import (  # noqa: F401
+                QWebEnginePage,
+                QWebEngineProfile,
+                QWebEngineSettings,
+                QWebEngineView,
+            )
+
             import webview.platforms.qt  # noqa: F401
             from PySide6 import QtWebEngineCore  # noqa: F401
 

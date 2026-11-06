@@ -58,6 +58,7 @@ if [[ "${DEB_ONLY}" == "0" ]]; then
     --include-package=bottle \
     --include-package=qtpy \
     --include-module=PySide6.QtNetwork \
+    --include-module=PySide6.QtWebChannel \
     --include-module=PySide6.QtWebEngineWidgets \
     --include-module=PySide6.QtWebEngineCore \
     --include-qt-plugins=platforminputcontexts \
