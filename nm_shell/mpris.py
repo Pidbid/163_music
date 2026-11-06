@@ -20,7 +20,7 @@ from dbus_next.service import PropertyAccess, ServiceInterface, dbus_property, m
 from loguru import logger
 
 from .ipc import PLAYER_NEXT, PLAYER_PREV, PLAYER_TOGGLE, SHOW_MAIN
-from .paths import APP_DISPLAY_NAME, APP_NAME
+from .paths import APP_NAME
 from .player import PlayerState
 
 SERVICE_NAME = "org.mpris.MediaPlayer2.netease_music"
@@ -55,11 +55,16 @@ class MprisRoot(ServiceInterface):
 
     @dbus_property(access=PropertyAccess.READ)
     def Identity(self) -> "s":
-        return APP_DISPLAY_NAME
+        # GNOME titles the media header with Identity when DesktopEntry is
+        # unset; use the application name rather than the web player's brand.
+        return APP_NAME
 
     @dbus_property(access=PropertyAccess.READ)
     def DesktopEntry(self) -> "s":
-        return APP_NAME
+        # GNOME prefers the desktop entry's Name over Identity. Returning an
+        # empty value keeps the media header titled "163-music" instead of the
+        # web player's "网易云音乐" name.
+        return ""
 
     @dbus_property(access=PropertyAccess.READ)
     def HasTrackList(self) -> "b":

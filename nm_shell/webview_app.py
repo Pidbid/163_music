@@ -32,15 +32,37 @@ CHROMIUM_FLAGS = (
     "--disable-renderer-backgrounding "
     "--disable-backgrounding-occluded-windows"
 )
+# Chromium exposes its own MPRIS player on Linux when HID media keys are
+# handled. The tray host already publishes org.mpris.MediaPlayer2.netease_music,
+# and GNOME lists every MPRIS name, so leave media keys to our service.
+CHROMIUM_LINUX_FEATURES = ("HardwareMediaKeyHandling",)
 WINDOW_BASE_COLOR = "#f7f9fc"
 TRANSPARENT_WINDOW = sys.platform.startswith("linux")
 
 
 def _set_chromium_flags() -> None:
-    current = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-    missing = [flag for flag in CHROMIUM_FLAGS.split() if flag not in current]
-    if missing:
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join([current, *missing]).strip()
+    tokens = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
+    features = list(CHROMIUM_LINUX_FEATURES) if sys.platform.startswith("linux") else []
+    merged: list[str] = []
+    disable_at: int | None = None
+    for token in tokens:
+        if token.startswith("--disable-features="):
+            features.extend(part for part in token.split("=", 1)[1].split(",") if part)
+            if disable_at is None:
+                disable_at = len(merged)
+                merged.append("")
+            continue
+        merged.append(token)
+    if features:
+        value = "--disable-features=" + ",".join(dict.fromkeys(features))
+        if disable_at is None:
+            merged.append(value)
+        else:
+            merged[disable_at] = value
+    for flag in CHROMIUM_FLAGS.split():
+        if flag not in merged:
+            merged.append(flag)
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(merged)
 
 
 def build_chrome_script() -> str:
