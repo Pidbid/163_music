@@ -13,8 +13,9 @@ for command_name in uv dpkg-deb desktop-file-validate; do
   fi
 done
 
-if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
-  echo "only amd64 DEB builds are supported by this script" >&2
+ARCH="$(dpkg --print-architecture)"
+if [[ "${ARCH}" != "amd64" && "${ARCH}" != "arm64" ]]; then
+  echo "only amd64/arm64 DEB builds are supported by this script" >&2
   exit 1
 fi
 
@@ -27,7 +28,7 @@ if [[ "${1:-}" == "--deb-only" ]]; then
 fi
 
 APP_VERSION="$(uv run python -c 'from nm_shell.version import __version__; print(__version__)')"
-DEB_NAME="163-music_${APP_VERSION}_amd64.deb"
+DEB_NAME="163-music_${APP_VERSION}_${ARCH}.deb"
 BUILD_DIR="dist/nuitka-linux"
 PACKAGE_ROOT="dist/deb-root"
 APP_ROOT="${PACKAGE_ROOT}/opt/163-music"
@@ -154,7 +155,7 @@ Package: 163-music
 Version: ${APP_VERSION}
 Section: sound
 Priority: optional
-Architecture: amd64
+Architecture: ${ARCH}
 Maintainer: Pidbid <Pidbid@users.noreply.github.com>
 Installed-Size: ${INSTALLED_SIZE}
 Homepage: https://github.com/Pidbid/163_music

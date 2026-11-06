@@ -43,10 +43,14 @@
 
 ## 📦 安装
 
-首要产物是 DEB，当前只针对 Ubuntu amd64 验证：
+首要产物是 DEB，提供 Ubuntu amd64 与 arm64（aarch64）构建：
 
 ```bash
+# amd64
 sudo apt install ./163-music_0.1.0_amd64.deb
+
+# arm64 / aarch64
+sudo apt install ./163-music_0.1.0_arm64.deb
 ```
 
 启动方式：
@@ -121,7 +125,7 @@ uv run ruff check .
 ```
 
 脚本使用 Nuitka onefile 编译 `main.py`，产物为 `dist/163-music`，再组装
-`dist/163-music_<version>_amd64.deb`。只重新打包已有二进制：
+`dist/163-music_<version>_<arch>.deb`。只重新打包已有二进制：
 
 ```bash
 ./build_linux.sh --deb-only
@@ -147,24 +151,25 @@ APPIMAGETOOL=/path/to/appimagetool ./scripts/build_appimage.sh
 产物：
 
 - `dist/163-music`
-- `dist/163-music_<version>_amd64.deb`
+- `dist/163-music_<version>_<arch>.deb`（amd64 / arm64）
 - `dist/nuitka-windows/163-music.exe`（Windows）
 - `dist/163-music-macos.zip`（macOS .app）
 - `dist/163-music-<version>-x86_64.AppImage`（Linux）
 
 ## 🔄 持续集成
 
-GitHub Actions 工作流位于 `.github/workflows/ci.yml`，覆盖四个目标：
+GitHub Actions 工作流位于 `.github/workflows/ci.yml`，覆盖五个目标：
 
 | Job | 运行环境 | 产物 |
 | --- | --- | --- |
 | `linux` | Ubuntu 22.04 amd64 | `163-music_<version>_amd64.deb` |
+| `linux-arm64` | Ubuntu 24.04 arm64 | `163-music_<version>_arm64.deb` |
 | `appimage` | Ubuntu 22.04 x86_64 | `163-music-<version>-x86_64.AppImage` |
 | `windows` | windows-latest x64 | `163-music.exe`（Nuitka onefile） |
 | `macos` | macos-latest arm64 | `163-music-macos.zip`（Nuitka app bundle） |
 
-每次 push / PR 会先跑 `ruff` 和 `pytest`，然后构建对应平台产物。Windows/macOS 目前是 CI
-构建目标，主要交互仍以 Ubuntu 版本为准。
+每次 push / PR 会先跑 `ruff` 和 `pytest`，然后构建对应平台产物。arm64、Windows/macOS
+目前是 CI 构建目标，主要交互仍以 Ubuntu amd64 版本为准。
 
 ## 🗂️ 项目结构
 
@@ -189,7 +194,7 @@ build_linux.sh          Nuitka + DEB 构建
 
 ## ⚠️ 已知限制
 
-- 运行时以 Ubuntu amd64 为主；Windows/macOS 有 CI 构建产物，但未做完整交互验证。
+- 运行时以 Ubuntu amd64 为主；arm64/Windows/macOS 有 CI 构建产物，但未做完整交互验证。
 - QtWebEngine 的 profile 与系统 Chrome 独立，不能共享登录状态。
 - 页面顶部颜色采样针对纯色和 CSS 渐变背景；位图自定义皮肤只能近似匹配。
 - 网页是第三方在线页面，页面结构、接口和可用歌曲可能随时变化；不保证长期兼容。
