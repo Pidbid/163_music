@@ -57,6 +57,9 @@ if [[ "${DEB_ONLY}" == "0" ]]; then
     --include-package=proxy_tools \
     --include-package=bottle \
     --include-package=qtpy \
+    --include-module=PySide6.QtNetwork \
+    --include-module=PySide6.QtWebEngineWidgets \
+    --include-module=PySide6.QtWebEngineCore \
     --include-qt-plugins=platforminputcontexts \
     --include-data-dir=ui=ui \
     --include-data-dir=assets=assets \
