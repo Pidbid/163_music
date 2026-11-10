@@ -21,7 +21,7 @@ from .lyrics import LyricsCache
 from .paths import APP_DISPLAY_NAME, APP_URL, ensure_data_dirs, icon_path, resource_path, webengine_dir
 from .player import PlayerState
 from .window_api import MIN_HEIGHT, MIN_WIDTH, ShellApi
-from .window_manager import set_page_background
+from .window_manager import fit_to_screen, set_page_background
 
 CHROME_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -172,11 +172,12 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
     )
     api.bind(main)
 
-    if TRANSPARENT_WINDOW:
-        def prepare_transparent_window() -> None:
+    def prepare_window() -> None:
+        if TRANSPARENT_WINDOW:
             set_page_background(main, WINDOW_BASE_COLOR)
+        fit_to_screen(main, (MIN_WIDTH, MIN_HEIGHT))
 
-        main.events.before_show += prepare_transparent_window
+    main.events.before_show += prepare_window
 
     def inject_chrome() -> None:
         nonlocal chrome_script
@@ -191,6 +192,7 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
 
     def on_loaded() -> None:
         threading.Timer(0.2, inject_chrome).start()
+        threading.Timer(0.4, lambda: fit_to_screen(main, (MIN_WIDTH, MIN_HEIGHT))).start()
 
     def main_closing() -> bool:
         if quit_event.is_set():

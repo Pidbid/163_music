@@ -98,6 +98,51 @@ def available_geometry(window: Any) -> Bounds | None:
         return None
 
 
+def fit_bounds(
+    bounds: Bounds,
+    available: Bounds,
+    minimum: tuple[int, int],
+    margin: int = 24,
+) -> Bounds | None:
+    """Return bounds that fit inside the work area, or ``None`` if already fine.
+
+    HiDPI sessions report a small logical work area, so the 1380x880 default
+    opens wider than the screen. A frameless window larger than the screen
+    leaves its popups (tooltips, menus) composited off-surface, which is where
+    black rectangles come from.
+    """
+    ax, ay, aw, ah = available
+    x, y, width, height = bounds
+    min_width, min_height = minimum
+    limit_width = max(min_width, aw - 2 * margin)
+    limit_height = max(min_height, ah - 2 * margin)
+    # never grow past the work area, never shrink under the usable minimum
+    new_width = max(min_width, min(width, limit_width))
+    new_height = max(min_height, min(height, limit_height))
+    inside = ax <= x and ay <= y and x + width <= ax + aw and y + height <= ay + ah
+    if inside and new_width == width and new_height == height:
+        return None
+    new_x = ax + (aw - new_width) // 2
+    new_y = ay + (ah - new_height) // 2
+    return (new_x, new_y, new_width, new_height)
+
+
+def fit_to_screen(window: Any, minimum: tuple[int, int], margin: int = 24) -> Bounds | None:
+    """Shrink/centre the window when it does not fit the screen it opened on."""
+    bounds = current_bounds(window)
+    available = available_geometry(window)
+    if bounds is None or available is None:
+        return None
+    fitted = fit_bounds(bounds, available, minimum, margin)
+    if fitted is None:
+        logger.debug("Window {} already fits {}", bounds, available)
+        return None
+    if apply_bounds(window, fitted):
+        logger.info("Window {} fitted to {} (screen {})", bounds, fitted, available)
+        return fitted
+    return None
+
+
 def apply_bounds(window: Any, bounds: Bounds) -> bool:
     x, y, width, height = bounds
     try:

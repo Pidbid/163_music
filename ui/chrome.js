@@ -11,6 +11,9 @@
   var MIN_HEIGHT = 620;
   var DRAG_THRESHOLD = 4;
   var DOUBLE_CLICK_MS = 340;
+  var TIP_ID = "nm-shell-tip";
+  var TIP_DELAY_MS = 420;
+  var TIP_SCAN_MS = 90;
 
   if (window.__nmShellInstalled && document.getElementById(BAR_ID)) return;
   window.__nmShellInstalled = true;
@@ -652,11 +655,155 @@
       "#nm-resize-ne { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }",
       "#nm-resize-sw { bottom: 0; left: 0; width: 14px; height: 14px; cursor: nesw-resize; }",
       "#nm-resize-se { bottom: 0; right: 0; width: 14px; height: 14px; cursor: nwse-resize; }",
+      "#nm-shell-tip {",
+      "  position: fixed; left: 0; top: 0; z-index: 2147483647; pointer-events: none;",
+      "  max-width: 320px; padding: 5px 9px; border-radius: 6px;",
+      "  background: #ffffff; color: #1f2430; border: 1px solid rgba(0, 0, 0, .16);",
+      "  box-shadow: 0 8px 22px rgba(16, 22, 35, .22);",
+      "  font: 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',",
+      "    'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;",
+      "  white-space: pre-wrap; overflow-wrap: break-word;",
+      "  opacity: 0; transform: translateY(-2px);",
+      "  transition: opacity 90ms linear, transform 90ms linear;",
+      "}",
+      "#nm-shell-tip[data-nm-visible='1'] { opacity: 1; transform: none; }",
       "@media (prefers-reduced-motion: reduce) {",
       "  #nm-shell-bar .nm-btn, #nm-shell-bar .nm-btn:active { transition: none; transform: none; }",
+      "  #nm-shell-tip { transition: none; }",
       "}"
     ].join("\n");
     (document.head || document.documentElement).appendChild(style);
+  }
+
+  // Chromium draws a page tooltip (an element's `title`) as its own native
+  // popup window. On ARM Linux with a Wayland session those popups regularly
+  // come up as an unpainted black box -- the window appears, the text does
+  // not. Drawing the tip inside the page removes that dependency: it is inert
+  // markup, it scales with the page, and it cannot be lost by a compositor.
+  var tipState = { el: null, node: null, timer: 0, x: 0, y: 0, scanAt: 0 };
+
+  function tipNode() {
+    if (tipState.node && tipState.node.isConnected) return tipState.node;
+    var node = document.createElement("div");
+    node.id = TIP_ID;
+    node.setAttribute("role", "tooltip");
+    node.setAttribute("aria-hidden", "true");
+    document.body.appendChild(node);
+    tipState.node = node;
+    return node;
+  }
+
+  function placeTip(x, y) {
+    var node = tipState.node;
+    if (!node) return;
+    var gap = 16;
+    var width = node.offsetWidth;
+    var height = node.offsetHeight;
+    var left = x + gap;
+    var top = y + gap;
+    if (left + width > window.innerWidth - 8) left = Math.max(8, x - width - gap);
+    if (top + height > window.innerHeight - 8) top = Math.max(8, y - height - gap);
+    node.style.left = Math.round(left) + "px";
+    node.style.top = Math.round(top) + "px";
+  }
+
+  function hideTip(restore) {
+    if (tipState.timer) {
+      clearTimeout(tipState.timer);
+      tipState.timer = 0;
+    }
+    if (tipState.node) {
+      tipState.node.removeAttribute("data-nm-visible");
+      tipState.node.setAttribute("aria-hidden", "true");
+    }
+    var element = tipState.el;
+    tipState.el = null;
+    if (element && restore && element.isConnected) {
+      var text = element.getAttribute("data-nm-title");
+      if (text !== null) {
+        if (!element.hasAttribute("title")) element.setAttribute("title", text);
+        element.removeAttribute("data-nm-title");
+      }
+    }
+  }
+
+  function showTip(text, x, y) {
+    var node = tipNode();
+    node.textContent = text;
+    node.setAttribute("aria-hidden", "false");
+    node.setAttribute("data-nm-visible", "1");
+    placeTip(x, y);
+  }
+
+  function tipOwner(target) {
+    if (!target || !target.closest) return null;
+    var element = target.closest("[title], [data-nm-title]");
+    return element === tipState.node ? null : element;
+  }
+
+  function onTipOver(event) {
+    var element = tipOwner(event.target);
+    if (!element || element === tipState.el) return;
+    var text = (element.getAttribute("title") || element.getAttribute("data-nm-title") || "").trim();
+    if (!text) return;
+    hideTip(true);
+    element.setAttribute("data-nm-title", text);
+    element.removeAttribute("title");
+    tipState.el = element;
+    tipState.x = event.clientX;
+    tipState.y = event.clientY;
+    tipState.timer = setTimeout(function () {
+      tipState.timer = 0;
+      if (tipState.el === element) showTip(text, tipState.x, tipState.y);
+    }, TIP_DELAY_MS);
+  }
+
+  function onTipMove(event) {
+    tipState.x = event.clientX;
+    tipState.y = event.clientY;
+    if (!tipState.el) {
+      // Titles are often attached after the first mouseover (player controls
+      // mount late, list items recycle). Pick them up from the pointer target
+      // too, otherwise the native popup would be the only tip shown. Hit
+      // testing is not free, so do it at most every TIP_SCAN_MS.
+      var now = Date.now();
+      if (now - tipState.scanAt < TIP_SCAN_MS) return;
+      tipState.scanAt = now;
+      var late = tipOwner(document.elementFromPoint(event.clientX, event.clientY));
+      if (late && (late.getAttribute("title") || "").trim()) {
+        onTipOver({
+          target: late,
+          clientX: event.clientX,
+          clientY: event.clientY
+        });
+      }
+      return;
+    }
+    if (tipState.node && tipState.node.getAttribute("data-nm-visible") === "1") {
+      placeTip(event.clientX, event.clientY);
+    }
+  }
+
+  function onTipOut(event) {
+    if (!tipState.el) return;
+    if (event.relatedTarget && tipState.el.contains(event.relatedTarget)) return;
+    hideTip(true);
+  }
+
+  function installTooltips() {
+    if (window.__nmShellTips) return;
+    window.__nmShellTips = true;
+    var dismiss = function () { hideTip(true); };
+    document.addEventListener("mouseover", onTipOver, true);
+    document.addEventListener("mousemove", onTipMove, true);
+    document.addEventListener("mouseout", onTipOut, true);
+    document.addEventListener("mousedown", dismiss, true);
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") dismiss();
+    }, true);
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("blur", dismiss);
   }
 
   function icon(path) {
@@ -1071,6 +1218,7 @@
   function installBar() {
     if (!document.body) return;
     installStyle();
+    installTooltips();
     installResizeZones();
     installShellFrame();
     applyWindowShape(maximizedState);

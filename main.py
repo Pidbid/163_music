@@ -15,6 +15,7 @@ from typing import Any
 
 from loguru import logger
 
+from nm_shell import BOOTSTRAP
 from nm_shell.ipc import (
     HIDE_MAIN,
     QUIT,
@@ -281,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     config = _config_from_args(args)
     setup_logging(args.debug, console=args.debug or not _is_frozen())
     logger.info("{} v{} starting (pid={})", APP_NAME, __version__, os.getpid())
+    if BOOTSTRAP:
+        logger.info("Qt environment: {}", ", ".join(f"{k}={v}" for k, v in BOOTSTRAP.items()))
 
     if args.smoke_test:
         return run_smoke(config)
