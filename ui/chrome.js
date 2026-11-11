@@ -137,11 +137,6 @@
   var BLACK_FG = { r: 0, g: 0, b: 0, a: 1 };
   var WHITE_FG = { r: 255, g: 255, b: 255, a: 1 };
 
-  function rgba(color, alpha) {
-    return "rgba(" + Math.round(color.r) + ", " + Math.round(color.g) + ", " +
-      Math.round(color.b) + ", " + Math.max(0, Math.min(1, alpha)).toFixed(4) + ")";
-  }
-
   function mixColor(first, second, amount) {
     var t = Math.max(0, Math.min(1, amount));
     return {
@@ -219,37 +214,186 @@
     return standard.score >= 4.6 ? standard.color : pick([BLACK_FG, WHITE_FG]).color;
   }
 
-  function parseGradient(value) {
-    var text = String(value || "");
-    if (!text || text === "none" || text.indexOf("gradient(") === -1) return null;
-    var matches = text.match(/rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}/g);
-    if (!matches) return null;
-    var colors = matches.map(parseColor).filter(Boolean);
-    if (!colors.length) return null;
+  function splitParts(text) {
+    var parts = [];
+    var depth = 0;
+    var start = 0;
+    for (var i = 0; i < text.length; i += 1) {
+      var character = text.charAt(i);
+      if (character === "(") depth += 1;
+      else if (character === ")") depth -= 1;
+      else if (character === "," && depth === 0) {
+        parts.push(text.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    parts.push(text.slice(start).trim());
+    return parts.filter(Boolean);
+  }
+
+  function findGradient(value) {
+    var match = /(?:^|[\s,])(repeating-)?(linear|radial|conic)-gradient\(/.exec(value);
+    if (!match) return null;
+    var open = value.indexOf("(", match.index);
+    var depth = 0;
+    for (var i = open; i < value.length; i += 1) {
+      var character = value.charAt(i);
+      if (character === "(") depth += 1;
+      else if (character === ")") {
+        depth -= 1;
+        if (!depth) {
+          return { type: match[2], repeating: !!match[1], body: value.slice(open + 1, i) };
+        }
+      }
+    }
+    return null;
+  }
+
+  var SIDE_ANGLES = {
+    top: 0,
+    right: 90,
+    bottom: 180,
+    left: 270,
+    "top right": 45,
+    "right top": 45,
+    "bottom right": 135,
+    "right bottom": 135,
+    "bottom left": 225,
+    "left bottom": 225,
+    "top left": 315,
+    "left top": 315
+  };
+
+  function gradientAngle(direction) {
+    var text = clean(direction).toLowerCase();
+    var match = text.match(/^(-?[\d.]+)(deg|turn|rad|grad)$/);
+    if (match) {
+      var amount = Number(match[1]);
+      if (match[2] === "turn") return amount * 360;
+      if (match[2] === "rad") return (amount * 180) / Math.PI;
+      if (match[2] === "grad") return amount * 0.9;
+      return amount;
+    }
+    var side = text.replace(/^to\s+/, "");
+    if (side !== text && SIDE_ANGLES[side] != null) return SIDE_ANGLES[side];
+    return null;
+  }
+
+  function gradientStops(parts, length) {
+    var stops = [];
+    parts.forEach(function (part) {
+      var match = part.match(/^(rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})(?:\s+(-?[\d.]+)(%|px))?$/);
+      if (!match) return;
+      var color = parseColor(match[1]);
+      if (!color) return;
+      var percent = null;
+      if (match[3] === "%") percent = Number(match[2]);
+      else if (match[3] === "px" && length > 0) percent = (Number(match[2]) / length) * 100;
+      stops.push({ color: color, percent: percent });
+    });
+    if (!stops.length) return null;
+    if (stops[0].percent == null) stops[0].percent = 0;
+    if (stops[stops.length - 1].percent == null) stops[stops.length - 1].percent = 100;
+    for (var i = 1; i < stops.length - 1; i += 1) {
+      if (stops[i].percent != null) continue;
+      var end = i;
+      while (stops[end].percent == null) end += 1;
+      var start = stops[i - 1].percent;
+      var step = (stops[end].percent - start) / (end - i + 1);
+      for (var j = i; j < end; j += 1) stops[j].percent = start + step * (j - i + 1);
+      i = end;
+    }
+    return stops;
+  }
+
+  function mixStop(first, second, amount) {
+    var t = Math.max(0, Math.min(1, amount));
+    var firstAlpha = first.a == null ? 1 : first.a;
+    var secondAlpha = second.a == null ? 1 : second.a;
+    return {
+      r: first.r + (second.r - first.r) * t,
+      g: first.g + (second.g - first.g) * t,
+      b: first.b + (second.b - first.b) * t,
+      a: firstAlpha + (secondAlpha - firstAlpha) * t
+    };
+  }
+
+  function colorAtStop(stops, percent) {
+    if (percent <= stops[0].percent) return stops[0].color;
+    for (var i = 1; i < stops.length; i += 1) {
+      var previous = stops[i - 1];
+      var next = stops[i];
+      if (percent <= next.percent) {
+        var span = next.percent - previous.percent;
+        return mixStop(previous.color, next.color, span > 0 ? (percent - previous.percent) / span : 0);
+      }
+    }
+    return stops[stops.length - 1].color;
+  }
+
+  function averageGradientColor(stops) {
     var total = 0;
     var r = 0;
     var g = 0;
     var b = 0;
     var a = 0;
-    colors.forEach(function (color) {
-      var weight = Math.max(0.0001, color.a);
+    stops.forEach(function (stop) {
+      var weight = Math.max(0.0001, stop.color.a);
       total += weight;
-      r += color.r * weight;
-      g += color.g * weight;
-      b += color.b * weight;
-      a += color.a * weight;
+      r += stop.color.r * weight;
+      g += stop.color.g * weight;
+      b += stop.color.b * weight;
+      a += stop.color.a * weight;
     });
     if (!total) return null;
     return { r: r / total, g: g / total, b: b / total, a: Math.min(1, a / total) };
   }
 
-  function layerColor(element) {
+  function parseGradient(value, point, rect) {
+    var text = String(value || "");
+    if (!text || text === "none" || text.indexOf("gradient(") === -1) return null;
+    var gradient = findGradient(text);
+    if (!gradient) return null;
+    var parts = splitParts(gradient.body);
+    var direction = gradientAngle(parts[0]);
+    if (direction != null) parts.shift();
+    var linear = gradient.type === "linear" && !gradient.repeating;
+    var width = rect ? Math.max(1, rect.width) : 0;
+    var height = rect ? Math.max(1, rect.height) : 0;
+    var radians = ((direction == null ? 180 : direction) * Math.PI) / 180;
+    var length = Math.abs(width * Math.sin(radians)) + Math.abs(height * Math.cos(radians));
+    var stops = gradientStops(parts, linear ? length : 0);
+    if (!stops) return null;
+    if (!linear || !point || !rect || length <= 0) return averageGradientColor(stops);
+    var fraction = 0.5 + (
+      (point.x - rect.left - width / 2) * Math.sin(radians) -
+      (point.y - rect.top - height / 2) * Math.cos(radians)
+    ) / length;
+    return colorAtStop(stops, Math.max(0, Math.min(1, fraction)) * 100);
+  }
+
+  function layerColor(element, x, y) {
     try {
       var style = getComputedStyle(element);
-      var gradient = parseGradient(style.backgroundImage);
-      if (gradient) return gradient;
+      var opacity = Number(style.opacity);
+      if (isFinite(opacity) && opacity <= 0.001) return null;
+      if (!isFinite(opacity)) opacity = 1;
+      var rect = element.getBoundingClientRect();
+      var point = isFinite(x) && isFinite(y) ? { x: x, y: y } : null;
+      var image = style.backgroundImage || "none";
+      // Image backgrounds are repainted by a bar media layer, which also
+      // carries any gradient in the same background list. Only the element's
+      // background colour belongs to the sampled base in that case.
+      var gradient = image.indexOf("url(") === -1 ? parseGradient(image, point, rect) : null;
+      if (gradient) {
+        gradient.a = Math.min(1, (gradient.a == null ? 1 : gradient.a) * opacity);
+        return gradient;
+      }
       var color = parseColor(style.backgroundColor);
-      if (color && color.a > 0.001) return color;
+      if (color && color.a > 0.001) {
+        color.a = Math.min(1, color.a * opacity);
+        return color;
+      }
     } catch (error) {
       return null;
     }
@@ -268,25 +412,162 @@
     for (var i = stack.length - 1; i >= 0; i -= 1) {
       var element = stack[i];
       if (element === document.body || element === document.documentElement) continue;
-      if (element.id === BAR_ID || element.closest("#" + BAR_ID) ||
-          element.classList.contains("nm-resize")) {
-        continue;
-      }
-      var color = layerColor(element);
+      if (shellElement(element)) continue;
+      var color = layerColor(element, x, y);
       if (color) result = composite(color, result);
     }
     return result;
   }
 
+  function shellElement(element) {
+    return element.id === BAR_ID || element.closest("#" + BAR_ID) ||
+      element.classList.contains("nm-resize") ||
+      element.closest("#nm-shell-backdrop") || element.closest("#nm-shell-frame");
+  }
+
+  function layerAlpha(element, x, y) {
+    if (element === document.body || element === document.documentElement) return 1;
+    if (shellElement(element)) return 0;
+    try {
+      var style = getComputedStyle(element);
+      var opacity = Number(style.opacity);
+      if (!isFinite(opacity)) opacity = 1;
+      if (opacity <= 0.001) return 0;
+      var gradient = parseGradient(
+        style.backgroundImage,
+        { x: x, y: y },
+        element.getBoundingClientRect()
+      );
+      if (gradient) return Math.min(1, (gradient.a == null ? 1 : gradient.a) * opacity);
+      var color = parseColor(style.backgroundColor);
+      return color ? Math.min(1, color.a * opacity) : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  function layerVisible(element, x, y) {
+    var stack = document.elementsFromPoint(x, y);
+    var index = stack.indexOf(element);
+    if (index < 0) return false;
+    var alpha = 0;
+    for (var i = 0; i < index; i += 1) {
+      alpha += layerAlpha(stack[i], x, y) * (1 - alpha);
+      if (alpha >= 0.9) return false;
+    }
+    return true;
+  }
+
+  function sampleImageLayers() {
+    // Solid colours and gradients are read from computed styles, but a page
+    // whose top strip is a background image would otherwise fall back to the
+    // page body colour. Collect those image layers so the bar can repaint them
+    // at the same size and position, and skip any covered by opaque layers.
+    var width = Math.max(1, window.innerWidth);
+    var y = Math.max(0, Math.min(window.innerHeight - 1, BAR_HEIGHT + 2));
+    var layers = [];
+    var visible = [];
+    THEME_FRACTIONS.forEach(function (fraction) {
+      var x = Math.max(0, Math.min(width - 1, Math.round(fraction * (width - 1))));
+      var stack = document.elementsFromPoint(x, y);
+      for (var i = stack.length - 1; i >= 0; i -= 1) {
+        var element = stack[i];
+        if (element === document.body || element === document.documentElement) continue;
+        if (shellElement(element)) continue;
+        var style;
+        try {
+          style = getComputedStyle(element);
+        } catch (error) {
+          continue;
+        }
+        if (!style.backgroundImage || style.backgroundImage.indexOf("url(") === -1) continue;
+        var opacity = Number(style.opacity);
+        if (isFinite(opacity) && opacity <= 0.001) continue;
+        var rect = element.getBoundingClientRect();
+        if (rect.width < 8 || rect.height < 8) continue;
+        if (rect.top >= BAR_HEIGHT + 4 || rect.bottom <= BAR_HEIGHT) continue;
+        var index = layers.indexOf(element);
+        if (index < 0) {
+          layers.push(element);
+          visible.push([]);
+          index = layers.length - 1;
+        }
+        visible[index].push(layerVisible(element, x, y));
+      }
+    });
+    return layers.filter(function (element, index) {
+      var samples = visible[index];
+      var shown = samples.filter(Boolean).length;
+      return samples.length > 0 && shown >= Math.ceil(samples.length * 0.9);
+    });
+  }
+
+  var barMedia = [];
+
+  function syncBarMedia(layers) {
+    var bar = document.getElementById(BAR_ID);
+    if (!bar) return false;
+    var drag = bar.querySelector(".nm-drag");
+    var changed = false;
+    var next = [];
+    layers.forEach(function (element) {
+      var rect = element.getBoundingClientRect();
+      var style = getComputedStyle(element);
+      var entry = null;
+      for (var i = 0; i < barMedia.length; i += 1) {
+        if (barMedia[i].element === element) {
+          entry = barMedia[i];
+          break;
+        }
+      }
+      if (!entry) {
+        var node = document.createElement("div");
+        node.className = "nm-bar-media";
+        node.setAttribute("aria-hidden", "true");
+        bar.insertBefore(node, drag);
+        entry = { element: element, node: node, key: "" };
+        changed = true;
+      }
+      var key = [
+        rect.left, rect.top, rect.width, rect.height, style.opacity,
+        style.backgroundImage, style.backgroundSize,
+        style.backgroundPosition, style.backgroundRepeat
+      ].join("|");
+      if (entry.key !== key) {
+        entry.key = key;
+        changed = true;
+        var node = entry.node;
+        node.style.left = rect.left + "px";
+        node.style.top = (rect.top - BAR_HEIGHT) + "px";
+        node.style.width = rect.width + "px";
+        node.style.height = rect.height + "px";
+        node.style.backgroundImage = style.backgroundImage;
+        node.style.backgroundSize = style.backgroundSize;
+        node.style.backgroundPosition = style.backgroundPosition;
+        node.style.backgroundRepeat = style.backgroundRepeat;
+        node.style.opacity = style.opacity;
+      }
+      next.push(entry);
+    });
+    barMedia.forEach(function (entry) {
+      if (next.indexOf(entry) === -1 && entry.node.parentNode) {
+        entry.node.parentNode.removeChild(entry.node);
+        changed = true;
+      }
+    });
+    barMedia = next;
+    return changed;
+  }
+
   var THEME_FRACTIONS = [0, 0.02, 0.05, 0.09, 0.13, 0.15, 0.18, 0.24, 0.32, 0.45, 0.6, 0.75, 0.9, 1];
-  var THEME_MIN_MS = 360;
-  var THEME_MAX_MS = 640;
+  var THEME_MIN_MS = 160;
+  var THEME_MAX_MS = 240;
   var THEME_SKIP_DELTA_E = 1;
-  var THEME_SAMPLE_GAP_MS = 500;
+  var THEME_IMMEDIATE_DELTA_E = 18;
+  var THEME_LEAD_MS = 60;
+  var THEME_SAMPLE_GAP_MS = 400;
   var THEME_MAX_STOPS = 24;
-  var BOTTOM_CACHE_MS = 2000;
   var themeState = { current: null, from: null, to: null, started: 0, duration: 0, frame: 0 };
-  var bottomThemeCache = { time: 0, color: null };
   var themeSampleTimer = 0;
   var lastThemeSampleAt = 0;
   var shellFrame = null;
@@ -341,82 +622,22 @@
     return samples;
   }
 
-  function sampleBottom() {
-    var now = Date.now();
-    if (now - bottomThemeCache.time < BOTTOM_CACHE_MS) return bottomThemeCache.color;
-    var color = null;
-    var bar = footer();
-    if (bar) {
-      var rect = bar.getBoundingClientRect();
-      if (rect.width > 8 && rect.height > 8 && rect.height < window.innerHeight * 0.6 &&
-          rect.bottom > BAR_HEIGHT + 4 && rect.top < window.innerHeight - 4) {
-        var y = Math.max(
-          BAR_HEIGHT + 4,
-          Math.min(window.innerHeight - 5, rect.top + rect.height * 0.5)
-        );
-        var width = Math.max(1, window.innerWidth);
-        var fractions = [0.03, 0.2, 0.5, 0.8, 0.97];
-        color = averageColor(fractions.map(function (fraction) {
-          var x = Math.max(0, Math.min(width - 1, Math.round(fraction * (width - 1))));
-          return colorAt(x, y);
-        }));
-      }
-    }
-    bottomThemeCache = { time: now, color: color };
-    return color;
-  }
-
-  function tintAlpha(top, bottom) {
-    if (!top || !bottom) return 0;
-    if (deltaE(top, bottom) <= 5) return 0.7;
-    var low = 0;
-    var high = 0.7;
-    for (var i = 0; i < 28; i += 1) {
-      var middle = (low + high) / 2;
-      if (deltaE(mixColor(top, bottom, middle), top) <= 5) low = middle;
-      else high = middle;
-    }
-    return low;
-  }
-
   function themeModel() {
     var top = sampleTop();
     var mean = averageColor(top.map(function (sample) { return sample.color; })) ||
       { r: 247, g: 249, b: 252, a: 1 };
-    var bottom = sampleBottom();
-    var alpha = tintAlpha(mean, bottom);
-    return {
-      top: top,
-      mean: mean,
-      tint: alpha > 0.001 ? { color: bottom, alpha: alpha } : null
-    };
+    return { top: top, mean: mean };
   }
 
   function backgroundFor(model) {
     var stops = model.top.map(function (sample) {
       return rgb(sample.color) + " " + sample.percent.toFixed(2) + "%";
     }).join(", ");
-    var base = "linear-gradient(90deg, " + stops + ")";
-    if (!model.tint) return base;
-    var color = model.tint.color;
-    var alpha = model.tint.alpha;
-    return "linear-gradient(180deg, " + rgba(color, alpha) + " 0%, " +
-      rgba(color, alpha * 0.82) + " 52%, " + rgba(color, 0) + " 100%), " + base;
+    return "linear-gradient(90deg, " + stops + ")";
   }
 
-  function tintAt(model, fraction) {
-    if (!model.tint) return null;
-    var amount = Math.max(0, Math.min(1, fraction));
-    var alpha = amount <= 0.52
-      ? model.tint.alpha * (1 - 0.18 * (amount / 0.52))
-      : model.tint.alpha * 0.82 * (1 - (amount - 0.52) / 0.48);
-    return alpha > 0.001 ? { color: model.tint.color, alpha: alpha } : null;
-  }
-
-  function modelColorAt(model, percent, verticalFraction) {
-    var base = colorAtPercent(model.top, percent);
-    var tint = tintAt(model, verticalFraction);
-    return tint ? mixColor(base, tint.color, tint.alpha) : base;
+  function modelColorAt(model, percent) {
+    return colorAtPercent(model.top, percent);
   }
 
   function setStyleIfChanged(bar, name, value) {
@@ -427,17 +648,11 @@
     var width = Math.max(1, window.innerWidth);
     var titlePercent = width > 1 ? (Math.min(width - 1, 80) / (width - 1)) * 100 : 0;
     var controlPercent = width > 1 ? (Math.max(0, width - 66) / (width - 1)) * 100 : 100;
-    var titleBackgrounds = [
-      modelColorAt(model, titlePercent, 0),
-      modelColorAt(model, titlePercent, 0.5)
-    ];
-    var controlBackgrounds = [
-      modelColorAt(model, controlPercent, 0),
-      modelColorAt(model, controlPercent, 0.5)
-    ];
+    var titleBackgrounds = [modelColorAt(model, titlePercent)];
+    var controlBackgrounds = [modelColorAt(model, controlPercent)];
     var titleForeground = bestForegroundFor(titleBackgrounds);
     var controlForeground = bestForegroundFor(controlBackgrounds);
-    var controlColor = modelColorAt(model, controlPercent, 0.5);
+    var controlColor = modelColorAt(model, controlPercent);
     var controlLum = luminance(controlColor);
     setStyleIfChanged(bar, "--nm-bar-fg", rgb(titleForeground));
     setStyleIfChanged(bar, "--nm-title-fg", rgb(titleForeground));
@@ -483,29 +698,15 @@
     });
   }
 
-  function interpolateTint(first, second, amount) {
-    var from = first || { color: second ? second.color : { r: 0, g: 0, b: 0, a: 1 }, alpha: 0 };
-    var to = second || { color: from.color, alpha: 0 };
-    var alpha = from.alpha + (to.alpha - from.alpha) * amount;
-    if (alpha <= 0.001) return null;
-    return { color: mixColor(from.color, to.color, amount), alpha: alpha };
-  }
-
   function interpolateModel(first, second, amount) {
     return {
       top: interpolateStops(first.top, second.top, amount),
-      mean: mixColor(first.mean, second.mean, amount),
-      tint: interpolateTint(first.tint, second.tint, amount)
+      mean: mixColor(first.mean, second.mean, amount)
     };
   }
 
   function themeDistance(first, second) {
-    var distance = deltaE(first.mean, second.mean);
-    var firstTint = first.tint || { color: first.mean, alpha: 0 };
-    var secondTint = second.tint || { color: second.mean, alpha: 0 };
-    var tintDistance = deltaE(firstTint.color, secondTint.color) *
-      Math.max(firstTint.alpha, secondTint.alpha);
-    return Math.max(distance, tintDistance);
+    return deltaE(first.mean, second.mean);
   }
 
   function stepTheme(now) {
@@ -534,7 +735,8 @@
     }
     var distance = themeDistance(themeState.current, next);
     if (distance < THEME_SKIP_DELTA_E && !immediate) return;
-    if (immediate || document.hidden || prefersReducedMotion()) {
+    if (immediate || distance >= THEME_IMMEDIATE_DELTA_E ||
+        document.hidden || prefersReducedMotion()) {
       if (themeState.frame) cancelAnimationFrame(themeState.frame);
       themeState.frame = 0;
       themeState.current = next;
@@ -555,7 +757,8 @@
     lastThemeSampleAt = Date.now();
     if (document.hidden && !immediate) return;
     try {
-      startTheme(themeModel(), !!immediate);
+      var mediaChanged = syncBarMedia(sampleImageLayers());
+      startTheme(themeModel(), !!immediate || mediaChanged);
     } catch (error) {
       logError("主题采样失败：" + (error && error.message ? error.message : error));
     } finally {
@@ -567,11 +770,29 @@
 
   function scheduleThemeSample() {
     if (themeSampleTimer) return;
-    var wait = Math.max(0, THEME_SAMPLE_GAP_MS - (Date.now() - lastThemeSampleAt));
+    // A page swap (for example opening the full-screen player) mutates the
+    // app class and repaints at once. Sample right away after an idle period
+    // so the bar never shows the previous page's colour, then throttle the
+    // burst of follow-up mutations.
+    var since = Date.now() - lastThemeSampleAt;
+    var wait = since >= THEME_SAMPLE_GAP_MS
+      ? THEME_LEAD_MS
+      : THEME_SAMPLE_GAP_MS - since;
     themeSampleTimer = setTimeout(function () {
       themeSampleTimer = 0;
       sampleTheme();
-    }, wait);
+    }, Math.max(0, wait));
+  }
+
+  var themeBurstTimers = [];
+
+  function sampleThemeBurst() {
+    // SPA pages swap while the content transition runs, so follow a click with
+    // a few samples instead of waiting for the one-second poll.
+    for (var i = 0; i < themeBurstTimers.length; i += 1) clearTimeout(themeBurstTimers[i]);
+    themeBurstTimers = [120, 350, 600, 900, 1400].map(function (delay) {
+      return setTimeout(sampleTheme, delay);
+    });
   }
 
   function installStyle() {
@@ -585,6 +806,22 @@
       "  top: " + BAR_HEIGHT + "px !important;",
       "  height: calc(100vh - " + BAR_HEIGHT + "px) !important;",
       "  box-sizing: border-box !important;",
+      // Pages such as the full-screen player use position: fixed, which would
+      // otherwise anchor to the viewport and slide under the shell bar. Layout
+      // containment makes the app the containing block for those pages, so
+      // they start below the bar and end above the window bottom.
+      "  contain: layout paint !important;",
+      "}",
+      // The classic site (used by the login redirect) keeps its layout in
+      // body-level containers instead of #root. Reserve the same strip there.
+      // The shell nodes live under <html>, so body containment never moves the
+      // bar, the resize zones or the tooltip.
+      "body:not(:has(#root > div:first-child)) {",
+      "  position: relative !important;",
+      "  top: " + BAR_HEIGHT + "px !important;",
+      "  height: calc(100vh - " + BAR_HEIGHT + "px) !important;",
+      "  box-sizing: border-box !important;",
+      "  contain: layout !important;",
       "}",
       "#nm-shell-bar {",
       "  position: fixed; top: 0; left: 0; right: 0; height: " + BAR_HEIGHT + "px;",
@@ -594,9 +831,14 @@
       "  font: 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',",
       "    'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;",
       "  user-select: none; -webkit-user-select: none;",
+      "  overflow: hidden;",
       "  visibility: hidden;",
       "}",
       "#nm-shell-bar[data-nm-theme-ready='1'] { visibility: visible; }",
+      "#nm-shell-bar .nm-bar-media {",
+      "  position: absolute; left: 0; top: 0; pointer-events: none;",
+      "  background-color: transparent;",
+      "}",
       "html.nm-window-rounded { clip-path: inset(0 round " + WINDOW_RADIUS + "px); }",
       "html.nm-window-maximized { clip-path: none; }",
       "html.nm-window-rounded, html.nm-window-rounded body {",
@@ -614,7 +856,7 @@
       "html.nm-window-maximized #nm-shell-frame { display: none; }",
       "#nm-shell-bar .nm-drag {",
       "  flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 8px;",
-      "  padding: 0 13px; cursor: default;",
+      "  padding: 0 13px; cursor: default; position: relative; z-index: 1;",
       "}",
       "#nm-shell-bar .nm-logo {",
       "  width: 18px; height: 18px; border-radius: 5px; flex: 0 0 auto;",
@@ -627,7 +869,7 @@
       "}",
       "#nm-shell-bar .nm-actions {",
       "  display: flex; align-items: stretch; height: 100%;",
-      "  color: var(--nm-control-fg, inherit);",
+      "  color: var(--nm-control-fg, inherit); position: relative; z-index: 1;",
       "}",
       "#nm-shell-bar .nm-btn {",
       "  appearance: none; border: 0; background: transparent; color: inherit;",
@@ -688,7 +930,7 @@
     node.id = TIP_ID;
     node.setAttribute("role", "tooltip");
     node.setAttribute("aria-hidden", "true");
-    document.body.appendChild(node);
+    document.documentElement.appendChild(node);
     tipState.node = node;
     return node;
   }
@@ -1172,7 +1414,7 @@
       zone.dataset.dir = direction;
       zone.title = "调整窗口大小";
       zone.addEventListener("pointerdown", startResize);
-      document.body.appendChild(zone);
+      document.documentElement.appendChild(zone);
     });
   }
 
@@ -1205,14 +1447,14 @@
       backdrop = document.createElement("div");
       backdrop.id = "nm-shell-backdrop";
       backdrop.setAttribute("aria-hidden", "true");
-      document.body.appendChild(backdrop);
+      document.documentElement.appendChild(backdrop);
     }
     capturePageBase();
     if (shellFrame) return;
     shellFrame = document.createElement("div");
     shellFrame.id = "nm-shell-frame";
     shellFrame.setAttribute("aria-hidden", "true");
-    document.body.appendChild(shellFrame);
+    document.documentElement.appendChild(shellFrame);
   }
 
   function installBar() {
@@ -1268,7 +1510,7 @@
 
     bar.appendChild(drag);
     bar.appendChild(actions);
-    document.body.appendChild(bar);
+    document.documentElement.appendChild(bar);
 
     sampleTheme(true);
     refreshWindowState();
@@ -1294,6 +1536,8 @@
       observer.observe(app, { attributes: true, attributeFilter: ["class", "style"] });
     }
     window.__nmShellThemeObserver = observer;
+    document.addEventListener("click", sampleThemeBurst, true);
+    window.addEventListener("resize", scheduleThemeSample);
     window.addEventListener("popstate", scheduleThemeSample);
     window.addEventListener("hashchange", scheduleThemeSample);
     document.addEventListener("visibilitychange", function () {
