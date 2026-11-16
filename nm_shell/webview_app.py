@@ -34,8 +34,8 @@ CHROMIUM_FLAGS = (
     # The web player's own JS heap is the largest single consumer here, and on
     # Linux we rasterise in software, so the renderer carries all of it. Capping
     # V8 keeps the renderer near 450 MB instead of 660 MB on the netease web
-    # player (measured 100 s after load, same profile); 192 MB starts costing
-    # uncaught promise rejections from the page, so stay well above it.
+    # player (measured 100 s after load, same profile). 192 MB also worked but
+    # is close to what this SPA needs, so keep a comfortable margin.
     "--js-flags=--max-old-space-size=384"
 )
 # Chromium exposes its own MPRIS player on Linux when HID media keys are
