@@ -91,6 +91,11 @@ class ShellApi:
         if self._linux:
             self._qt_actions = _make_qt_action_bridge(self)
 
+    def start_hidden(self) -> None:
+        """Reflect a window pywebview created hidden (background playback)."""
+        self._main_visible = False
+        self._notify_window_state()
+
     # ------------------------------------------------------------------ player
     def update_player_state(self, payload: Any) -> dict[str, Any]:
         state = PlayerState.from_payload(payload)

@@ -184,6 +184,10 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         confirm_close=False,
     )
     api.bind(main)
+    if config.get("hidden"):
+        # Started for background playback: the window is created hidden, and the
+        # shell state has to say so or the tray would think it is on screen.
+        api.start_hidden()
 
     def prepare_window() -> None:
         # Runs on Qt's GUI thread: the audibility poller must be created here.
