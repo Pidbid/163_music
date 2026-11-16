@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
@@ -47,6 +48,44 @@ def set_page_background(window: Any, color: str | None) -> bool:
         return True
     except Exception as error:  # noqa: BLE001 - Qt raises implementation-specific errors
         logger.debug("Could not set the WebEngine page background: {}", error)
+        return False
+
+
+AUDIBLE_POLL_MS = 2000
+_AUDIBLE_TIMERS: dict[int, Any] = {}
+
+
+def watch_audible(window: Any, callback: Callable[[bool], None], *, enable: bool = True) -> bool:
+    """Report the page's engine-level ``recentlyAudible`` while the shell needs it.
+
+    The page's own player state comes from injected script; this signal comes
+    from the renderer, so it stays truthful even when the site's script is
+    paused, broken or absent. Must run on Qt's GUI thread.
+    """
+    view = browser_view(window)
+    if view is None:
+        return False
+    try:
+        from PySide6.QtCore import QTimer
+
+        uid = getattr(window, "uid", id(window))
+        timer = _AUDIBLE_TIMERS.get(uid)
+        if not enable:
+            if timer is not None:
+                timer.stop()
+                _AUDIBLE_TIMERS.pop(uid, None)
+            return True
+        page = view.webview.page()
+        if timer is None:
+            timer = QTimer(view)
+            timer.setInterval(AUDIBLE_POLL_MS)
+            timer.timeout.connect(lambda: callback(bool(page.recentlyAudible())))
+            timer.start()
+            _AUDIBLE_TIMERS[uid] = timer
+        callback(bool(page.recentlyAudible()))
+        return True
+    except Exception as error:  # noqa: BLE001 - Qt raises implementation-specific errors
+        logger.debug("Could not watch page audibility: {}", error)
         return False
 
 

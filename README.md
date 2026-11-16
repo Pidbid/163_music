@@ -210,6 +210,15 @@ build_linux.sh          Nuitka + DEB 构建
 - 另外把 Chromium 切到软件合成，并在同时存在 Wayland/X11 时使用 `xcb`：这让页面内的下拉、
   上下文菜单等其它原生弹层也走同一条稳的路径。想换回 GPU 合成：`NM_WEBENGINE_GPU=1 163-music`；
   想保留原生 Wayland：`NM_WEBENGINE_PLATFORM=wayland 163-music`。
+- 收进托盘会真正省内存：窗口隐藏、页面自身没有在播放、且引擎的 `recentlyAudible()`
+  也报告没有声音时，承载页面的 webview 子进程会在 90 秒后被结束（实测整棵进程树从约
+  1.0 GB 降到约 110 MB），托盘与 MPRIS 仍然可用；点"显示"或用媒体键播放会重新拉起页面，
+  后台播放时窗口保持隐藏。QtWebEngine 自带的 `Frozen`/`Discarded` 生命周期状态在本机
+  Qt 6.12 上不生效（设置后立刻被读回 `Active`，也不释放内存），因此改用进程级休眠。
+  空闲阈值可用 `NM_SUSPEND_IDLE_SECONDS=秒数` 调整。播放中的页面永远不会被休眠。
+- 渲染进程的 V8 堆上限被压到 384 MB（`--js-flags=--max-old-space-size=384`），实测让网易云
+  播放页的渲染进程从约 660 MB 降到约 450 MB；无需该限制时删掉 `nm_shell/webview_app.py`
+  里的这条 flag 即可。
 - 截图中的账号/歌单区域已做隐私遮挡；实际界面以你的账号为准。
 
 ## 📄 许可

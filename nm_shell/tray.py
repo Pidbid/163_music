@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from .ipc import (
+    AUDIBLE,
     HIDE_MAIN,
     LYRICS,
     PLAYER_NEXT,
@@ -410,13 +411,14 @@ class TrayHost:
         send: Callable[[str], None],
         *,
         on_quit: Callable[[], None],
-        ensure_child: Callable[[], None] | None = None,
         state_queue: Any = None,
+        on_activity: Callable[[bool, bool, bool], None] | None = None,
     ) -> None:
         self._send = send
         self._on_quit = on_quit
-        self._ensure_child = ensure_child
         self._state_queue = state_queue
+        self._on_activity = on_activity
+        self._audible = False
         self._qt_app: Any = None
         self._tray: Any = None
         self._menu: Any = None
@@ -442,11 +444,7 @@ class TrayHost:
 
     # ------------------------------------------------------------------ commands
     def _command(self, command: str) -> None:
-        if self._ensure_child is not None:
-            try:
-                self._ensure_child()
-            except Exception as error:  # noqa: BLE001
-                logger.warning("Could not restart webview child: {}", error)
+        # The send callback wakes (or starts) the webview child when it is asleep.
         try:
             self._send(command)
         except Exception as error:  # noqa: BLE001
@@ -529,6 +527,7 @@ class TrayHost:
                 self._lyrics_song_id = None
             self._state = state
             self._apply_state()
+            self._notify_activity()
         elif kind == LYRICS and len(message) >= 3:
             song_id = message[1]
             lines = message[2]
@@ -540,6 +539,19 @@ class TrayHost:
         elif kind == WINDOW_STATE and len(message) >= 3:
             self._visible = bool(message[1])
             self._sync_window_actions()
+            self._notify_activity()
+        elif kind == AUDIBLE and len(message) >= 2:
+            self._audible = bool(message[1])
+            self._notify_activity()
+
+    def _notify_activity(self) -> None:
+        callback = self._on_activity
+        if callback is None:
+            return
+        try:
+            callback(not self._visible, self._state.playing, self._audible)
+        except Exception as error:  # noqa: BLE001 - never break the tray
+            logger.debug("Activity callback failed: {}", error)
 
     def _apply_state(self) -> None:
         state = self._state

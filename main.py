@@ -10,6 +10,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import urllib.request
 from typing import Any
 
@@ -25,11 +26,16 @@ from nm_shell.ipc import (
 )
 from nm_shell.logging_setup import setup_logging
 from nm_shell.lyrics import LyricLine, parse_lrc
+from nm_shell.page_power import SuspendPolicy
 from nm_shell.paths import APP_DISPLAY_NAME, APP_NAME, APP_URL, icon_path, resource_path
 from nm_shell.player import PlayerState
 from nm_shell.single_instance import SingleInstance
 from nm_shell.tray import TrayHost
 from nm_shell.version import __version__
+
+# A hidden player is put to sleep once it has been idle this long; the page is a
+# whole Chromium process and QtWebEngine's own lifecycle states free nothing.
+IDLE_SUSPEND_SECONDS = float(os.environ.get("NM_SUSPEND_IDLE_SECONDS", "90"))
 
 
 def _is_frozen() -> bool:
@@ -167,10 +173,16 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
     child: multiprocessing.Process | None = None
     quitting = threading.Event()
 
+    spawn = {"hidden": False}
+    policy = SuspendPolicy()
+    asleep = {"flag": False}
+    idle: dict[str, Any] = {"timer": None, "since": None}
+    idle_lock = threading.Lock()
+
     def start_child() -> multiprocessing.Process:
         process = ctx.Process(
             target=_webview_child,
-            args=(config, commands, state_queue),
+            args=(dict(config, hidden=spawn["hidden"]), commands, state_queue),
             name="163-music-webview",
             daemon=False,
         )
@@ -184,7 +196,62 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
             if child is None or not child.is_alive():
                 child = start_child()
 
+    def schedule_sleep() -> None:
+        """Start the idle countdown once, not on every state tick."""
+        with idle_lock:
+            if not policy.needs_suspend() or quitting.is_set():
+                idle["since"] = None
+                timer = idle["timer"]
+                if timer is not None:
+                    timer.cancel()
+                    idle["timer"] = None
+                return
+            if idle["since"] is None:
+                idle["since"] = time.monotonic()
+            if idle["timer"] is not None:
+                return
+            remaining = IDLE_SUSPEND_SECONDS - (time.monotonic() - idle["since"])
+            timer = threading.Timer(max(0.0, remaining), sleep_child)
+            timer.daemon = True
+            idle["timer"] = timer
+            timer.start()
+
+    def wake_child() -> None:
+        if not asleep["flag"]:
+            return
+        asleep["flag"] = False
+        with idle_lock:
+            idle["since"] = None
+        policy.disarm()
+        logger.info("Waking the suspended web player")
+        ensure_child()
+
+    def sleep_child() -> None:
+        with child_lock:
+            process = child
+        if process is None or not process.is_alive() or quitting.is_set():
+            return
+        if not policy.needs_suspend():
+            # Something started playing while the timer was pending.
+            return
+        asleep["flag"] = True
+        policy.disarm()
+        logger.info("Suspending the hidden web player (pid={})", process.pid)
+        process.terminate()
+        with idle_lock:
+            idle["timer"] = None
+            idle["since"] = None
+
+    def on_activity(hidden: bool, playing: bool, audible: bool) -> None:
+        logger.debug("Tray activity: hidden={} playing={} audible={}", hidden, playing, audible)
+        policy.set_hidden(hidden)
+        policy.set_playing(playing)
+        policy.set_audible(audible)
+        schedule_sleep()
+
     def send(command: str) -> None:
+        spawn["hidden"] = command not in (SHOW_MAIN, TOGGLE_MAIN)
+        wake_child()
         try:
             commands.put(command)
         except Exception as error:  # noqa: BLE001
@@ -203,8 +270,8 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
     tray = TrayHost(
         send,
         on_quit=on_quit,
-        ensure_child=ensure_child,
         state_queue=state_queue,
+        on_activity=on_activity,
     )
 
     def instance_command(command: str) -> None:
@@ -219,15 +286,24 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
     instance.start_server(instance_command)
 
     def monitor() -> None:
-        process = child
-        if process is None:
+        while not quitting.is_set():
+            with child_lock:
+                process = child
+            if process is None:
+                time.sleep(0.2)
+                continue
+            process.join()
+            if quitting.is_set():
+                return
+            if asleep["flag"]:
+                logger.info("Web player is asleep; keeping the tray host alive")
+                while asleep["flag"] and not quitting.is_set():
+                    time.sleep(0.2)
+                continue
+            logger.warning("Webview child exited unexpectedly (code={})", process.exitcode)
+            tray.stop()
+            threading.Timer(2.0, hard_exit).start()
             return
-        process.join()
-        if quitting.is_set():
-            return
-        logger.warning("Webview child exited unexpectedly (code={})", process.exitcode)
-        tray.stop()
-        threading.Timer(2.0, hard_exit).start()
 
     threading.Thread(target=monitor, name="webview-monitor", daemon=True).start()
 

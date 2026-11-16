@@ -30,13 +30,20 @@ CHROME_UA = (
 CHROMIUM_FLAGS = (
     "--disable-background-timer-throttling "
     "--disable-renderer-backgrounding "
-    "--disable-backgrounding-occluded-windows"
+    "--disable-backgrounding-occluded-windows "
+    # The web player's own JS heap is the largest single consumer here, and on
+    # Linux we rasterise in software, so the renderer carries all of it. Capping
+    # V8 keeps the renderer near 450 MB instead of 660 MB on the netease web
+    # player (measured 100 s after load, same profile); 192 MB starts costing
+    # uncaught promise rejections from the page, so stay well above it.
+    "--js-flags=--max-old-space-size=384"
 )
 # Chromium exposes its own MPRIS player on Linux when HID media keys are
 # handled. The tray host already publishes org.mpris.MediaPlayer2.netease_music,
 # and GNOME lists every MPRIS name, so leave media keys to our service.
 CHROMIUM_LINUX_FEATURES = ("HardwareMediaKeyHandling",)
 WINDOW_BASE_COLOR = "#f7f9fc"
+PLAYER_COMMANDS = frozenset({"player_prev", "player_next", "player_toggle"})
 TRANSPARENT_WINDOW = sys.platform.startswith("linux")
 
 
@@ -141,6 +148,11 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
     def on_window_state(visible: bool, maximized: bool) -> None:
         put_state(ipc.WINDOW_STATE, bool(visible), bool(maximized))
 
+    def on_audible(audible: bool) -> None:
+        # The tray decides when the page may sleep and needs the engine's own
+        # answer: the site's script can be wrong or absent.
+        put_state(ipc.AUDIBLE, bool(audible))
+
     def request_quit() -> None:
         try:
             commands.put(ipc.QUIT)
@@ -157,6 +169,7 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         APP_DISPLAY_NAME,
         url=config.get("url") or APP_URL,
         js_api=api,
+        hidden=bool(config.get("hidden")),
         width=1380,
         height=880,
         min_size=(MIN_WIDTH, MIN_HEIGHT),
@@ -173,11 +186,19 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
     api.bind(main)
 
     def prepare_window() -> None:
+        # Runs on Qt's GUI thread: the audibility poller must be created here.
+        from .window_manager import watch_audible
+
+        watch_audible(main, on_audible, enable=True)
         if TRANSPARENT_WINDOW:
             set_page_background(main, WINDOW_BASE_COLOR)
         fit_to_screen(main, (MIN_WIDTH, MIN_HEIGHT))
 
     main.events.before_show += prepare_window
+
+    page_ready = threading.Event()
+    deferred: list[str] = []
+    deferred_lock = threading.Lock()
 
     def inject_chrome() -> None:
         nonlocal chrome_script
@@ -190,8 +211,21 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         except Exception as error:  # noqa: BLE001
             logger.warning("Could not inject shell chrome: {}", error)
 
+    def when_injected() -> None:
+        inject_chrome()
+        page_ready.set()
+        with deferred_lock:
+            queued = list(deferred)
+            deferred.clear()
+        for command in queued:
+            logger.debug("Running player command deferred during page load: {}", command)
+            try:
+                commands.put(command)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("Could not replay deferred command: {}", error)
+
     def on_loaded() -> None:
-        threading.Timer(0.2, inject_chrome).start()
+        threading.Timer(0.2, when_injected).start()
         threading.Timer(0.4, lambda: fit_to_screen(main, (MIN_WIDTH, MIN_HEIGHT))).start()
 
     def main_closing() -> bool:
@@ -204,6 +238,7 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         logger.debug("Main window hidden to tray")
         return False
 
+    main.events.before_load += lambda: page_ready.clear()
     main.events.loaded += on_loaded
     main.events.closing += main_closing
 
@@ -214,6 +249,12 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
             except (queue.Empty, EOFError, OSError):
                 continue
             if command is None:
+                continue
+            if command in PLAYER_COMMANDS and not page_ready.is_set():
+                # Woken from a suspended state: the page is still loading, so run
+                # the command once the shell has injected its player bridge.
+                with deferred_lock:
+                    deferred.append(command)
                 continue
             logger.debug("Webview command: {}", command)
             try:

@@ -13,5 +13,6 @@ PLAYER_TOGGLE = "player_toggle"
 
 PLAYER_STATE = "player_state"
 WINDOW_STATE = "window_state"
+AUDIBLE = "audible"
 LYRICS = "lyrics"
 LYRICS_ERROR = "lyrics_error"
