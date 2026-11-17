@@ -7,6 +7,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from typing import Any
 
 # pywebview's Qt backend imports qtpy before the binding is selected. Force
@@ -101,6 +102,11 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(config.get("debug_port", 9229))
 
     quit_event = threading.Event()
+    # The site restores the current track after a restart, which takes longer
+    # than the page's load event: a player command must wait for the first
+    # state report instead of clicking a button the player has not created yet.
+    player_ready = threading.Event()
+    player_actions: queue.Queue[str] = queue.Queue()
     tray_state = {"available": True}
     lyrics_cache = LyricsCache()
     lyrics_lock = threading.Lock()
@@ -139,6 +145,7 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         threading.Thread(target=work, name=f"lyrics-{song_id}", daemon=True).start()
 
     def on_player_state(state: PlayerState) -> None:
+        player_ready.set()
         if state_queue is None:
             return
         put_state(ipc.PLAYER_STATE, state.to_payload())
@@ -242,7 +249,11 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         logger.debug("Main window hidden to tray")
         return False
 
-    main.events.before_load += lambda: page_ready.clear()
+    def on_before_load() -> None:
+        page_ready.clear()
+        player_ready.clear()
+
+    main.events.before_load += on_before_load
     main.events.loaded += on_loaded
     main.events.closing += main_closing
 
@@ -269,11 +280,11 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
                 elif command == ipc.TOGGLE_MAIN:
                     api.main_action("toggle")
                 elif command == ipc.PLAYER_PREV:
-                    api.player_action("prev")
+                    player_actions.put("prev")
                 elif command == ipc.PLAYER_NEXT:
-                    api.player_action("next")
+                    player_actions.put("next")
                 elif command == ipc.PLAYER_TOGGLE:
-                    api.player_action("toggle")
+                    player_actions.put("toggle")
                 elif command == ipc.RELOAD:
                     api.reload_main()
                 elif command == ipc.TRAY_UNAVAILABLE:
@@ -294,7 +305,31 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
             except Exception as error:  # noqa: BLE001
                 logger.warning("Command {} failed: {}", command, error)
 
+    def player_worker() -> None:
+        while not quit_event.is_set():
+            try:
+                action = player_actions.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if action is None:
+                continue
+            if not player_ready.wait(10.0):
+                logger.warning("Player action {} skipped: no player on the page", action)
+                continue
+            for attempt in range(3):
+                try:
+                    if api.player_action(action):
+                        logger.debug("Player action applied: {}", action)
+                        break
+                except Exception as error:  # noqa: BLE001
+                    logger.debug("Player action {} failed: {}", action, error)
+                logger.debug("Player action {} not applied yet (attempt {})", action, attempt + 1)
+                time.sleep(0.4)
+            else:
+                logger.warning("Player action {} did not apply", action)
+
     threading.Thread(target=command_loop, name="webview-commands", daemon=True).start()
+    threading.Thread(target=player_worker, name="webview-player", daemon=True).start()
 
     try:
         webview.start(

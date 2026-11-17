@@ -12,6 +12,10 @@ the engine reports as audible, must never be suspended. Audibility comes from
 ``QWebEnginePage.recentlyAudible()`` rather than the page's own script, so a
 player whose state reporting is missing or wrong still keeps its page.
 
+A paused player may sleep; the site restores its current track when the page
+comes back, and the command that woke it is replayed once the page is ready
+(see ``nm_shell.webview_app``).
+
 Suspension happens once per hiding: after the tray has to wake the player (a
 command, or the window being shown) the page stays up until the next hide, so a
 sleeping player cannot be put back to sleep right after a play command.

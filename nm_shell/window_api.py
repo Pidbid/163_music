@@ -114,15 +114,14 @@ class ShellApi:
             return self._state.to_payload()
 
     def player_action(self, action: str) -> bool:
-        """Run one of the injected page's player actions."""
+        """Run one of the injected page's player actions; the page's answer wins."""
         window = self._main
         if window is None:
             return False
         action = str(action)
         try:
-            script = f"window.__nmPlayer && window.__nmPlayer.action({action!r})"
-            window.evaluate_js(script)
-            return True
+            script = f"window.__nmPlayer ? window.__nmPlayer.action({action!r}) : false"
+            return bool(window.evaluate_js(script))
         except Exception as error:  # noqa: BLE001
             logger.debug("Player action {} failed: {}", action, error)
             return False

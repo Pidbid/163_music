@@ -500,12 +500,17 @@ class TrayHost:
             self.stop()
 
     # ------------------------------------------------------------------ state
+    def set_state_queue(self, state_queue: Any) -> None:
+        """Follow the live webview child; its queues die with the process."""
+        self._state_queue = state_queue
+
     def _drain(self) -> None:
-        if self._state_queue is None:
+        state_queue = self._state_queue
+        if state_queue is None:
             return
         for _ in range(32):
             try:
-                message = self._state_queue.get_nowait()
+                message = state_queue.get_nowait()
             except queue.Empty:
                 return
             except (EOFError, OSError, ValueError) as error:

@@ -17,6 +17,7 @@ from typing import Any
 from loguru import logger
 
 from nm_shell import BOOTSTRAP
+from nm_shell.child_session import ChildSession
 from nm_shell.ipc import (
     HIDE_MAIN,
     QUIT,
@@ -167,34 +168,39 @@ def run_smoke(config: dict[str, Any]) -> int:
 
 def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
     ctx = multiprocessing.get_context("spawn")
-    commands = ctx.Queue()
-    state_queue = ctx.Queue()
-    child_lock = threading.Lock()
-    child: multiprocessing.Process | None = None
     quitting = threading.Event()
+    # Serialises wake, command delivery and suspension: a command that wakes
+    # the player must never race the sleep timer into retiring its new child.
+    lifecycle = threading.Lock()
 
     spawn = {"hidden": False}
     policy = SuspendPolicy()
     asleep = {"flag": False}
     idle: dict[str, Any] = {"timer": None, "since": None}
     idle_lock = threading.Lock()
+    tray_ref: dict[str, Any] = {"host": None}
 
-    def start_child() -> multiprocessing.Process:
-        process = ctx.Process(
-            target=_webview_child,
-            args=(dict(config, hidden=spawn["hidden"]), commands, state_queue),
-            name="163-music-webview",
-            daemon=False,
-        )
-        process.start()
-        logger.info("Started webview child pid={}", process.pid)
-        return process
+    def publish_channels(channels: Any) -> None:
+        host = tray_ref["host"]
+        if host is not None:
+            host.set_state_queue(channels.states)
 
-    def ensure_child() -> None:
-        nonlocal child
-        with child_lock:
-            if child is None or not child.is_alive():
-                child = start_child()
+    session = ChildSession(
+        ctx,
+        _webview_child,
+        lambda channels: (
+            dict(config, hidden=spawn["hidden"]),
+            channels.commands,
+            channels.states,
+        ),
+        name="163-music-webview",
+        on_channels=publish_channels,
+    )
+
+    def reset_idle() -> None:
+        with idle_lock:
+            idle["timer"] = None
+            idle["since"] = None
 
     def schedule_sleep() -> None:
         """Start the idle countdown once, not on every state tick."""
@@ -217,30 +223,28 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
             timer.start()
 
     def wake_child() -> None:
-        if not asleep["flag"]:
-            return
         asleep["flag"] = False
-        with idle_lock:
-            idle["since"] = None
         policy.disarm()
         logger.info("Waking the suspended web player")
-        ensure_child()
+        session.ensure_running()
 
     def sleep_child() -> None:
-        with child_lock:
-            process = child
-        if process is None or not process.is_alive() or quitting.is_set():
-            return
-        if not policy.needs_suspend():
-            # Something started playing while the timer was pending.
-            return
-        asleep["flag"] = True
-        policy.disarm()
-        logger.info("Suspending the hidden web player (pid={})", process.pid)
-        process.terminate()
-        with idle_lock:
-            idle["timer"] = None
-            idle["since"] = None
+        with lifecycle:
+            if quitting.is_set() or not policy.needs_suspend():
+                reset_idle()
+                return
+            process = session.process
+            if process is None or not process.is_alive():
+                reset_idle()
+                return
+            asleep["flag"] = True
+            policy.disarm()
+            logger.info("Suspending the hidden web player (pid={})", process.pid)
+            session.retire()
+            host = tray_ref["host"]
+            if host is not None:
+                host.set_state_queue(None)
+            reset_idle()
 
     def on_activity(hidden: bool, playing: bool, audible: bool) -> None:
         logger.debug("Tray activity: hidden={} playing={} audible={}", hidden, playing, audible)
@@ -250,12 +254,18 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
         schedule_sleep()
 
     def send(command: str) -> None:
-        spawn["hidden"] = command not in (SHOW_MAIN, TOGGLE_MAIN)
-        wake_child()
-        try:
-            commands.put(command)
-        except Exception as error:  # noqa: BLE001
-            logger.warning("Could not send {} to webview child: {}", command, error)
+        with lifecycle:
+            spawn["hidden"] = command not in (SHOW_MAIN, TOGGLE_MAIN)
+            if asleep["flag"] and (quitting.is_set() or command == QUIT):
+                # Quitting does not need a page; leave the sleeping player dead.
+                return
+            if asleep["flag"]:
+                wake_child()
+            else:
+                session.ensure_running()
+            delivered = session.send(command)
+        if not delivered:
+            logger.warning("Could not send {} to the webview child", command)
 
     def on_quit() -> None:
         quitting.set()
@@ -264,15 +274,13 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
         logger.info("Force exiting tray host")
         os._exit(0)
 
-    ensure_child()
-    assert child is not None
-
     tray = TrayHost(
         send,
         on_quit=on_quit,
-        state_queue=state_queue,
         on_activity=on_activity,
     )
+    tray_ref["host"] = tray
+    session.ensure_running()
 
     def instance_command(command: str) -> None:
         mapping = {
@@ -287,18 +295,15 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
 
     def monitor() -> None:
         while not quitting.is_set():
-            with child_lock:
-                process = child
+            process = session.process
             if process is None:
                 time.sleep(0.2)
                 continue
             process.join()
             if quitting.is_set():
                 return
-            if asleep["flag"]:
-                logger.info("Web player is asleep; keeping the tray host alive")
-                while asleep["flag"] and not quitting.is_set():
-                    time.sleep(0.2)
+            if session.process is not process:
+                # Retired for sleep, or already replaced by a waking command.
                 continue
             logger.warning("Webview child exited unexpectedly (code={})", process.exitcode)
             tray.stop()
@@ -313,25 +318,15 @@ def _start_tray(config: dict[str, Any], instance: SingleInstance) -> int:
     if not tray_ok:
         logger.warning("No system tray available; the window remains usable without tray controls")
         send(TRAY_UNAVAILABLE)
-        with child_lock:
-            process = child
+        process = session.process
         if process is not None:
             process.join()
     else:
         send(QUIT)
-        with child_lock:
-            process = child
+        process = session.process
         if process is not None:
             process.join(timeout=10)
-            if process.is_alive():
-                logger.warning("Webview child did not exit; terminating")
-                process.terminate()
-                process.join(timeout=5)
-    for command_queue in (commands, state_queue):
-        try:
-            command_queue.close()
-        except Exception:  # noqa: BLE001
-            pass
+    session.retire()
     return 0
 
 
