@@ -1,4 +1,7 @@
-"""When the hidden web player may be put to sleep.
+"""Legacy suspend policy, retained for historical regression coverage.
+
+The tray host no longer uses this policy: hidden pages remain alive. The notes
+below describe the old behaviour, not the current lifecycle.
 
 QtWebEngine's own page lifecycle states are no-ops on the Qt 6.12 build here
 (``setLifecycleState(Frozen)`` is immediately reported as ``Active`` again and

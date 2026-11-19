@@ -752,10 +752,10 @@
   }
 
   function sampleTheme(immediate) {
+    if (document.hidden) return;
     var bar = document.getElementById(BAR_ID);
     if (!bar) return;
     lastThemeSampleAt = Date.now();
-    if (document.hidden && !immediate) return;
     try {
       var mediaChanged = syncBarMedia(sampleImageLayers());
       startTheme(themeModel(), !!immediate || mediaChanged);
@@ -769,7 +769,7 @@
   }
 
   function scheduleThemeSample() {
-    if (themeSampleTimer) return;
+    if (document.hidden || themeSampleTimer) return;
     // A page swap (for example opening the full-screen player) mutates the
     // app class and repaints at once. Sample right away after an idle period
     // so the bar never shows the previous page's colour, then throttle the
@@ -787,6 +787,7 @@
   var themeBurstTimers = [];
 
   function sampleThemeBurst() {
+    if (document.hidden) return;
     // SPA pages swap while the content transition runs, so follow a click with
     // a few samples instead of waiting for the one-second poll.
     for (var i = 0; i < themeBurstTimers.length; i += 1) clearTimeout(themeBurstTimers[i]);
@@ -1093,6 +1094,7 @@
   }
 
   function refreshWindowState() {
+    if (document.hidden) return;
     safeCall("window_state").then(function (state) {
       if (state) updateMaximizeIcon(!!state.maximized);
     }).catch(function () {});
@@ -1102,6 +1104,7 @@
   var stateSyncTimer = null;
   function refreshWindowStateSoon() {
     clearTimeout(stateSyncTimer);
+    if (document.hidden) return;
     stateSyncTimer = setTimeout(refreshWindowState, 80);
   }
   window.addEventListener("resize", refreshWindowStateSoon);
@@ -1517,14 +1520,23 @@
     if (ROUNDED_WINDOW) {
       safeCall("page_transparent").catch(function () {});
     }
-    setInterval(scheduleThemeSample, 1000);
-    setInterval(refreshWindowState, 15000);
     watchThemeChanges();
   }
 
   function watchThemeChanges() {
     if (typeof MutationObserver !== "function") return;
     var observer = new MutationObserver(scheduleThemeSample);
+    window.__nmShellThemeObserver = observer;
+    observeThemeChanges();
+    document.addEventListener("click", sampleThemeBurst, true);
+    window.addEventListener("resize", scheduleThemeSample);
+    window.addEventListener("popstate", scheduleThemeSample);
+    window.addEventListener("hashchange", scheduleThemeSample);
+  }
+
+  function observeThemeChanges() {
+    var observer = window.__nmShellThemeObserver;
+    if (!observer || document.hidden) return;
     if (document.body) {
       observer.observe(document.body, { attributes: true, attributeFilter: ["class", "style"] });
     }
@@ -1535,14 +1547,35 @@
     if (app) {
       observer.observe(app, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    window.__nmShellThemeObserver = observer;
-    document.addEventListener("click", sampleThemeBurst, true);
-    window.addEventListener("resize", scheduleThemeSample);
-    window.addEventListener("popstate", scheduleThemeSample);
-    window.addEventListener("hashchange", scheduleThemeSample);
-    document.addEventListener("visibilitychange", function () {
-      if (!document.hidden) sampleTheme(true);
-    });
+  }
+
+  var themePollTimer = null;
+  var windowPollTimer = null;
+  var visualsActive = false;
+  function syncVisualActivity() {
+    if (document.hidden) {
+      visualsActive = false;
+      clearInterval(themePollTimer);
+      clearInterval(windowPollTimer);
+      themePollTimer = windowPollTimer = null;
+      clearTimeout(themeSampleTimer);
+      themeSampleTimer = 0;
+      clearTimeout(stateSyncTimer);
+      stateSyncTimer = null;
+      themeBurstTimers.forEach(clearTimeout);
+      themeBurstTimers = [];
+      if (themeState.frame) cancelAnimationFrame(themeState.frame);
+      themeState.frame = 0;
+      if (window.__nmShellThemeObserver) window.__nmShellThemeObserver.disconnect();
+      return;
+    }
+    if (visualsActive) return;
+    visualsActive = true;
+    observeThemeChanges();
+    sampleTheme(true);
+    refreshWindowState();
+    themePollTimer = setInterval(scheduleThemeSample, 1000);
+    windowPollTimer = setInterval(refreshWindowState, 15000);
   }
 
   function isRendered(element) {
@@ -1724,6 +1757,8 @@
 
   var playerTimer = setInterval(function () { reportPlayerState(false); }, 1000);
   window.__nmShellTimer = playerTimer;
+  document.addEventListener("visibilitychange", syncVisualActivity);
+  syncVisualActivity();
   window.addEventListener("pywebviewready", function () {
     reportPlayerState(true);
     refreshWindowState();

@@ -5,6 +5,16 @@ from nm_shell import webview_app
 MEDIA_KEY_FLAG = "--disable-features=HardwareMediaKeyHandling"
 
 
+def test_background_scheduling_uses_chromium_defaults(monkeypatch) -> None:
+    flags = _flags(monkeypatch, "linux")
+    assert not set(flags) & {
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+    }
+    assert "--js-flags=--max-old-space-size=384" in flags
+
+
 def _flags(monkeypatch, platform: str, current: str | None = None) -> list[str]:
     monkeypatch.setattr(webview_app.sys, "platform", platform)
     if current is None:

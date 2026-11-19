@@ -29,9 +29,6 @@ CHROME_UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 CHROMIUM_FLAGS = (
-    "--disable-background-timer-throttling "
-    "--disable-renderer-backgrounding "
-    "--disable-backgrounding-occluded-windows "
     # The web player's own JS heap is the largest single consumer here, and on
     # Linux we rasterise in software, so the renderer carries all of it. Capping
     # V8 keeps the renderer near 450 MB instead of 660 MB on the netease web
@@ -155,11 +152,6 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
     def on_window_state(visible: bool, maximized: bool) -> None:
         put_state(ipc.WINDOW_STATE, bool(visible), bool(maximized))
 
-    def on_audible(audible: bool) -> None:
-        # The tray decides when the page may sleep and needs the engine's own
-        # answer: the site's script can be wrong or absent.
-        put_state(ipc.AUDIBLE, bool(audible))
-
     def request_quit() -> None:
         try:
             commands.put(ipc.QUIT)
@@ -197,10 +189,6 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
         api.start_hidden()
 
     def prepare_window() -> None:
-        # Runs on Qt's GUI thread: the audibility poller must be created here.
-        from .window_manager import watch_audible
-
-        watch_audible(main, on_audible, enable=True)
         if TRANSPARENT_WINDOW:
             set_page_background(main, WINDOW_BASE_COLOR)
         fit_to_screen(main, (MIN_WIDTH, MIN_HEIGHT))
@@ -266,7 +254,7 @@ def run_webview_process(config: dict[str, Any], commands: Any, state_queue: Any 
             if command is None:
                 continue
             if command in PLAYER_COMMANDS and not page_ready.is_set():
-                # Woken from a suspended state: the page is still loading, so run
+                # During startup or explicit reload, the page is loading; run
                 # the command once the shell has injected its player bridge.
                 with deferred_lock:
                     deferred.append(command)

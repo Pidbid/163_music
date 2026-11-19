@@ -1,6 +1,11 @@
+import subprocess
 import sys
 
 from nm_shell.webview_app import build_chrome_script
+
+
+def test_hidden_page_stops_visual_work_and_resumes_once() -> None:
+    subprocess.run(["node", "tests/test_chrome_background.js"], check=True, timeout=10)
 
 
 def test_chrome_script_replaces_platform_placeholders() -> None:

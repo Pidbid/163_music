@@ -1,7 +1,6 @@
-"""The disposable process that hosts the web player.
+"""The retained process that hosts the web player.
 
-QtWebEngine's own page lifecycle states free nothing on the Qt build here, so
-the tray suspends the player by dropping its process. A multiprocessing queue
+Hiding keeps the child alive; retirement is for shutdown or recovery. A multiprocessing queue
 cannot outlive the process that reads it: a child terminated inside ``get``
 keeps the queue's reader lock, and every later reader blocks in it forever.
 Each child therefore gets its own queues, created with the process and closed
